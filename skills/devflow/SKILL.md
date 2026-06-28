@@ -61,6 +61,7 @@ DRAFT_PR=$(yq e '.gates.draft_pr // "true"' .devflow.yaml 2>/dev/null || echo "t
 FALLBACK_MODE=$(yq e '.fallback.mode // "generic"' .devflow.yaml 2>/dev/null || echo "generic")
 MAX_TOKENS=$(yq e '.limits.max_tokens_per_run // "0"' .devflow.yaml 2>/dev/null || echo "0")
 ON_LIMIT=$(yq e '.limits.on_limit // "confirm"' .devflow.yaml 2>/dev/null || echo "confirm")
+RETRY_LIMIT=$(yq e '.limits.retry_limit // "0"' .devflow.yaml 2>/dev/null || echo "0")
 ```
 
 If `$SUBARGS` contains `--auto-pr`, set `AUTO_PR=true` and strip the flag from the task description:
@@ -189,34 +190,68 @@ If `ESTIMATED_TOKENS > MAX_TOKENS`:
 
 ### Step 9 — Test gate
 
-If `$CMD_TEST` is set, run it inside `$WORKTREE`. If it fails and `$GATE_TESTS=true`:
+If `$CMD_TEST` is set, run it with retry support:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=test" "reason=tests_failed"
-if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} failed at test gate ❌"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Failed at test gate ❌" with title "DevFlow"'; fi; printf '\a'
+TEST_ATTEMPT=0
+TEST_PASSED=false
+while [ "$TEST_ATTEMPT" -le "$RETRY_LIMIT" ]; do
+  TEST_ATTEMPT=$((TEST_ATTEMPT + 1))
+  [ "$TEST_ATTEMPT" -gt 1 ] && echo "DevFlow: test retry ${TEST_ATTEMPT}/${RETRY_LIMIT}..."
+  if (cd "$WORKTREE" && eval "$CMD_TEST"); then
+    TEST_PASSED=true
+    break
+  fi
+  [ "$TEST_ATTEMPT" -gt "$RETRY_LIMIT" ] && break
+done
 ```
 
-Stop and report failure.
+If `$TEST_PASSED=false`:
+- If `$GATE_TESTS=true`: **Run now**, then stop and report failure:
+  ```bash
+  "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=test" "reason=tests_failed" "attempts=${TEST_ATTEMPT}"
+  if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} failed at test gate ❌"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Failed at test gate ❌" with title "DevFlow"'; fi; printf '\a'
+  ```
+- If `$GATE_TESTS=false`: warn "tests failed after ${TEST_ATTEMPT} attempt(s) — continuing (gate disabled)" and proceed.
+
+If `$TEST_PASSED=true` and `$TEST_ATTEMPT > 1`: note "tests passed on attempt ${TEST_ATTEMPT}".
 
 **Run now before proceeding:**
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=test" "status=passed"
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=test" "status=passed" "attempts=${TEST_ATTEMPT}"
 ```
 
 ### Step 10 — Lint gate
 
-If `$CMD_LINT` is set, run it inside `$WORKTREE`. If it fails and `$GATE_LINT=true`:
+If `$CMD_LINT` is set, run it with retry support:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=lint" "reason=lint_failed"
-if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} failed at lint gate ❌"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Failed at lint gate ❌" with title "DevFlow"'; fi; printf '\a'
+LINT_ATTEMPT=0
+LINT_PASSED=false
+while [ "$LINT_ATTEMPT" -le "$RETRY_LIMIT" ]; do
+  LINT_ATTEMPT=$((LINT_ATTEMPT + 1))
+  [ "$LINT_ATTEMPT" -gt 1 ] && echo "DevFlow: lint retry ${LINT_ATTEMPT}/${RETRY_LIMIT}..."
+  if (cd "$WORKTREE" && eval "$CMD_LINT"); then
+    LINT_PASSED=true
+    break
+  fi
+  [ "$LINT_ATTEMPT" -gt "$RETRY_LIMIT" ] && break
+done
 ```
 
-Stop and report failure.
+If `$LINT_PASSED=false`:
+- If `$GATE_LINT=true`: **Run now**, then stop and report failure:
+  ```bash
+  "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=lint" "reason=lint_failed" "attempts=${LINT_ATTEMPT}"
+  if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} failed at lint gate ❌"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Failed at lint gate ❌" with title "DevFlow"'; fi; printf '\a'
+  ```
+- If `$GATE_LINT=false`: warn "lint failed after ${LINT_ATTEMPT} attempt(s) — continuing (gate disabled)" and proceed.
+
+If `$LINT_PASSED=true` and `$LINT_ATTEMPT > 1`: note "lint passed on attempt ${LINT_ATTEMPT}".
 
 **Run now before proceeding:**
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=lint" "status=passed"
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=lint" "status=passed" "attempts=${LINT_ATTEMPT}"
 ```
 
 ### Step 11 — Build (optional)
@@ -730,6 +765,8 @@ fallback:
   mode: generic
 gates:
   draft_pr: true
+limits:
+  retry_limit: 2
 telemetry:
   enabled: true
   path: .devflow/runs/
