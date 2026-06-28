@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start <task> | /devflow status
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] <task> | /devflow status
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -44,7 +44,17 @@ ON_PARTIAL=$(yq e '.fan_out.on_partial_failure // "abort"' .devflow.yaml 2>/dev/
 GATE_TESTS=$(yq e '.gates.require_tests_pass // "true"' .devflow.yaml 2>/dev/null || echo "true")
 GATE_LINT=$(yq e '.gates.require_lint_pass // "true"' .devflow.yaml 2>/dev/null || echo "true")
 DEPLOY_BEFORE_PR=$(yq e '.gates.deploy_before_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
+AUTO_PR=$(yq e '.gates.auto_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
 FALLBACK_MODE=$(yq e '.fallback.mode // "generic"' .devflow.yaml 2>/dev/null || echo "generic")
+```
+
+If `$SUBARGS` contains `--auto-pr`, set `AUTO_PR=true` and strip the flag from the task description:
+
+```bash
+if echo "$SUBARGS" | grep -q -- '--auto-pr'; then
+  AUTO_PR=true
+  SUBARGS=$(echo "$SUBARGS" | sed 's/--auto-pr//g' | xargs)
+fi
 ```
 
 ### Step 3 — Generate task slug and run ID
@@ -148,9 +158,25 @@ cd "$WORKTREE"
 git add -A
 git commit -m "feat: $SUBARGS"
 git push origin "devflow/$TASK_SLUG"
+```
+
+If `$AUTO_PR=true`, open the PR immediately without asking:
+
+```bash
 gh pr create --title "feat: $SUBARGS" --body "Automated by DevFlow run \`$RUN_ID\`." --base "$BASE_BRANCH"
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=pr" "status=opened"
 ```
+
+If `$AUTO_PR=false`, show the command and ask the user to confirm before running:
+
+```
+Ready to open PR. Run this command to proceed:
+  gh pr create --title "feat: $SUBARGS" --body "Automated by DevFlow run `$RUN_ID`." --base "$BASE_BRANCH"
+
+Open the PR? (y/N)
+```
+
+Only run `gh pr create` after the user confirms.
 
 ### Step 15 — Post-PR deploy (optional)
 
