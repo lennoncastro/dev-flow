@@ -542,7 +542,38 @@ telemetry:
   path: .devflow/runs/
 ```
 
-### Step 7 — Write specialist agent
+### Step 7 — Register hook permissions
+
+Resolve the plugin scripts path and add an allow rule to `.claude/settings.json` so hook scripts can run without permission prompts.
+
+```bash
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  PLUGIN_SCRIPTS="${CLAUDE_PLUGIN_ROOT}/scripts"
+else
+  PLUGIN_SCRIPTS=$(ls -d ~/.claude/plugins/cache/lennoncastro/devflow/*/scripts 2>/dev/null | tail -1)
+fi
+```
+
+If `$PLUGIN_SCRIPTS` is non-empty, merge the allow rule into `.claude/settings.json`:
+
+```bash
+mkdir -p .claude
+python3 - <<PYEOF
+import json, os
+path = ".claude/settings.json"
+cfg = json.load(open(path)) if os.path.exists(path) else {}
+perms = cfg.setdefault("permissions", {})
+allow = perms.setdefault("allow", [])
+rule = 'Bash(bash "${PLUGIN_SCRIPTS}/*")'
+if rule not in allow:
+    allow.append(rule)
+json.dump(cfg, open(path, "w"), indent=2)
+PYEOF
+```
+
+Replace `${PLUGIN_SCRIPTS}` in the rule string with the actual resolved value of `$PLUGIN_SCRIPTS` before writing.
+
+### Step 9 — Write specialist agent
 
 Create `.claude/agents/<stack>.md` if it does not already exist. Use the template for the detected stack:
 
@@ -651,7 +682,7 @@ Write tests consistent with the existing test setup.
 No new dependencies without checking existing manifests first.
 ```
 
-### Step 8 — Report
+### Step 10 — Report
 
 Determine the recommended Claude Code skill for the detected stack:
 - flutter → `flutter-expert`
@@ -663,18 +694,40 @@ Determine the recommended Claude Code skill for the detected stack:
 - android → `kotlin-specialist`
 - generic → (no suggestion)
 
+Check if the plugin cache is stale:
+
+```bash
+CACHED_VERSION=$(python3 -c "
+import json, sys
+try:
+    d = json.load(open('${PLUGIN_SCRIPTS}/../../../marketplace.json'))
+    print(d['plugins'][0]['version'])
+except:
+    print('unknown')
+" 2>/dev/null || echo "unknown")
+SOURCE_VERSION=$(grep -E '^version:' .devflow.yaml | awk '{print $2}' | tr -d '"' || echo "unknown")
+```
+
+If `$CACHED_VERSION` is not `"unknown"` and `$SOURCE_VERSION` is not `"unknown"` and they differ, print:
+
+```
+⚠  Plugin cache may be stale (cache: <CACHED_VERSION>, config: <SOURCE_VERSION>).
+   Run: claude plugin update devflow@lennoncastro
+```
+
 Print the files created and next steps:
 
 ```
 Done.
   Created: .devflow.yaml
   Created: .claude/agents/<stack>.md
+  Updated: .claude/settings.json (hook permissions)
 
 Next: /devflow start <task description>
 Tip: your specialist at .claude/agents/<stack>.md can invoke the `<skill>` skill for deeper stack knowledge.
 ```
 
-Omit the Tip line for generic stack.
+Omit the Tip line for generic stack. Omit the `settings.json` line if `$PLUGIN_SCRIPTS` was empty.
 
 ---
 
