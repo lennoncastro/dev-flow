@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow plan <task>
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -1118,14 +1118,116 @@ Then:
 
 ---
 
+## Subcommand: clean
+
+Triggered when `$SUBCMD = clean`.
+
+Remove orphaned worktrees and old telemetry files.
+
+### Step 1 — Locate dirs
+
+```bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE_DIR="${REPO_ROOT}/.devflow/worktrees"
+TELEMETRY_DIR=".devflow/runs/"
+if [ -f ".devflow.yaml" ]; then
+  CONFIGURED=$(grep -A1 'path:' .devflow.yaml 2>/dev/null | tail -1 | awk '{print $2}' || true)
+  [ -n "$CONFIGURED" ] && TELEMETRY_DIR="$CONFIGURED"
+fi
+RETAIN_DAYS=$(grep 'retain_days:' .devflow.yaml 2>/dev/null | awk '{print $2}' || echo 30)
+```
+
+### Step 2 — Find orphaned worktrees
+
+For each directory in `$WORKTREE_DIR`:
+
+```bash
+ORPHANED_WORKTREES=""
+if [ -d "$WORKTREE_DIR" ]; then
+  for wt in "$WORKTREE_DIR"/*/; do
+    [ -d "$wt" ] || continue
+    slug=$(basename "$wt")
+    jsonl=$(ls "${TELEMETRY_DIR}${slug}"-*.jsonl 2>/dev/null | tail -1)
+    if [ -z "$jsonl" ]; then
+      ORPHANED_WORKTREES="${ORPHANED_WORKTREES} ${slug}"
+    else
+      last_event=$(tail -1 "$jsonl" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event",""))' 2>/dev/null || true)
+      if [ "$last_event" = "stop" ] || [ "$last_event" = "fail" ]; then
+        ORPHANED_WORKTREES="${ORPHANED_WORKTREES} ${slug}"
+      fi
+    fi
+  done
+fi
+```
+
+### Step 3 — Find old telemetry
+
+```bash
+OLD_TELEMETRY=""
+if [ -d "$TELEMETRY_DIR" ]; then
+  while IFS= read -r f; do
+    OLD_TELEMETRY="${OLD_TELEMETRY} ${f}"
+  done < <(find "$TELEMETRY_DIR" -name "*.jsonl" -mtime "+${RETAIN_DAYS}" 2>/dev/null)
+fi
+```
+
+### Step 4 — Show summary and confirm
+
+If both `$ORPHANED_WORKTREES` and `$OLD_TELEMETRY` are empty: "Nothing to clean." and stop.
+
+Otherwise display:
+
+```
+DevFlow clean
+──────────────────────────────────────────
+  Orphaned worktrees (<N>):
+    .devflow/worktrees/<slug>
+    ...
+
+  Old telemetry (><RETAIN_DAYS> days) (<N>):
+    .devflow/runs/<file>.jsonl
+    ...
+
+Total: <N> worktrees, <N> telemetry files
+──────────────────────────────────────────
+Remove all? (y/N)
+```
+
+Wait for user confirmation. If not `y`/`yes`: "Cancelled." and stop.
+
+### Step 5 — Remove
+
+For each slug in `$ORPHANED_WORKTREES`:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/worktree-cleanup.sh" "<slug>"
+```
+
+For each file in `$OLD_TELEMETRY`:
+
+```bash
+rm -f "<file>"
+```
+
+### Step 6 — Report
+
+```
+Cleaned:
+  <N> worktrees removed
+  <N> telemetry files deleted
+```
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, or `doctor`, respond:
+If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, or `clean`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow init
   /devflow start [--auto-pr] [--dry-run] <task description>
+  /devflow plan <task description>
   /devflow retry [run-id]
   /devflow abort [run-id]
   /devflow status
@@ -1133,4 +1235,6 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow config
   /devflow specialist add
   /devflow doctor
+  /devflow clean
+  /devflow update
 ```
