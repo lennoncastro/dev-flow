@@ -1042,6 +1042,127 @@ If `$SUBARGS` is not `add`, respond: "Usage: /devflow specialist add"
 
 ### Interactive wizard — /devflow specialist add
 
+**Step 0 — Choose a template**
+
+Show:
+
+```
+Choose a starting template (or 'custom' to start from scratch):
+
+  1. react       — React + TypeScript, hooks, Tailwind
+  2. nextjs      — Next.js App Router, RSC, API routes
+  3. fastapi     — FastAPI, Pydantic, async endpoints
+  4. django      — Django, DRF, PostgreSQL
+  5. express     — Node.js/Express, REST API
+  6. flutter     — Flutter 3+, Riverpod, Dart
+  7. ios         — SwiftUI, Combine, Swift
+  8. android     — Kotlin, Jetpack Compose
+  9. postgres    — PostgreSQL schema, migrations, indexes
+  10. custom     — Start from scratch (wizard)
+```
+
+Wait for the user to pick a number or type a name. Store as `SPEC_TEMPLATE`.
+
+If `custom` or `10`: skip to the custom wizard (Steps 1–5) below.
+
+If a template is chosen, set `SPEC_CONTENT` to the corresponding template body (see template library below), then ask:
+
+```
+Name for this specialist? (default: <template-name>)
+Which directory should it cover? (default: .)
+```
+
+Store answers as `SPEC_NAME` (default = template name) and `SPEC_DIR` (default = `.`). Then skip to "Generate the specialist file."
+
+**Template library** — use these exact bodies for `SPEC_CONTENT`:
+
+*react:*
+```
+React 18+ with TypeScript strict mode. Prefer functional components and hooks.
+Use existing component patterns in src/components/. Co-locate tests with components.
+State: prefer local state; use context or Zustand only for cross-cutting concerns.
+No new npm packages without checking package.json first.
+Run `tsc --noEmit` before considering a change done.
+```
+description: `React/TypeScript specialist`
+
+*nextjs:*
+```
+Next.js 14+ App Router. Use Server Components by default; add 'use client' only when needed.
+Follow existing route structure in app/. API routes go in app/api/.
+Use next/image for images, next/link for navigation.
+No new packages without checking package.json first.
+```
+description: `Next.js App Router specialist`
+
+*fastapi:*
+```
+FastAPI with Pydantic v2 and async endpoints. Follow existing router structure.
+Use dependency injection for DB sessions. All endpoints must have response_model.
+Write tests in tests/ using pytest and httpx AsyncClient.
+No new dependencies without checking pyproject.toml first.
+```
+description: `FastAPI specialist`
+
+*django:*
+```
+Django with Django REST Framework. Follow existing app structure.
+Use class-based views or ViewSets. Serializers validate all input.
+Write tests in tests/ using Django TestCase or pytest-django.
+No new packages without checking requirements.txt first.
+```
+description: `Django/DRF specialist`
+
+*express:*
+```
+Express.js with async/await. Follow existing router and middleware structure.
+Validate all input with existing validation library. Return consistent error shapes.
+Write tests with existing test runner (check package.json scripts).
+No new packages without checking package.json first.
+```
+description: `Node.js/Express specialist`
+
+*flutter:*
+```
+Use Flutter 3+ with Dart. Prefer Riverpod for state management if already used.
+Follow existing widget patterns in lib/. Use StatelessWidget unless state is needed.
+Colocate tests in test/ mirroring lib/ structure.
+No new pub dependencies without checking pubspec.yaml first.
+Run `flutter analyze` before considering a change done.
+```
+description: `Flutter/Dart specialist`
+
+*ios:*
+```
+SwiftUI with Combine. Follow existing MVVM structure.
+Use @StateObject for owned models, @ObservedObject for injected.
+Write unit tests in *Tests target. UI tests only for critical flows.
+No new Swift packages without checking Package.swift or Podfile first.
+```
+description: `SwiftUI/iOS specialist`
+
+*android:*
+```
+Kotlin with Jetpack Compose. Follow existing architecture (ViewModel + Repository).
+Use Hilt for DI if already set up. Write unit tests with JUnit + MockK.
+No new Gradle dependencies without checking build.gradle first.
+Run `./gradlew lint` before considering a change done.
+```
+description: `Android/Kotlin specialist`
+
+*postgres:*
+```
+PostgreSQL schema design and migrations. Follow existing migration tool conventions.
+Always add indexes for foreign keys and frequent query columns.
+Write migrations as idempotent scripts. Never DROP without a rollback plan.
+Test queries with EXPLAIN ANALYZE before finalizing.
+```
+description: `PostgreSQL specialist`
+
+---
+
+### Custom wizard (Steps 1–5)
+
 Ask each question and wait for the user's answer before proceeding:
 
 **Step 1:** "Name for this specialist? (e.g. backend, frontend, mobile)"
@@ -1059,6 +1180,15 @@ Ask each question and wait for the user's answer before proceeding:
 **Step 5:** "Any libraries or patterns to avoid? (Enter to skip)"
 → Store as `SPEC_AVOID` (empty = skip)
 
+Set `SPEC_CONTENT`:
+```
+<SPEC_DESC>.
+<If SPEC_FOLLOW non-empty: "Always follow: <SPEC_FOLLOW>.">
+<If SPEC_AVOID non-empty: "Avoid: <SPEC_AVOID>.">
+Write tests consistent with the existing setup.
+No new dependencies without checking existing manifests first.
+```
+
 ### Generate the specialist file
 
 Target path: `<SPEC_DIR>/.claude/agents/<SPEC_NAME>.md`
@@ -1069,14 +1199,10 @@ Create the directory if needed. Write the file:
 ```markdown
 ---
 name: <SPEC_NAME>
-description: <SPEC_DESC>
+description: <SPEC_DESC or template description>
 ---
 
-<SPEC_DESC>.
-<If SPEC_FOLLOW non-empty: "Always follow: <SPEC_FOLLOW>.">
-<If SPEC_AVOID non-empty: "Avoid: <SPEC_AVOID>.">
-Write tests consistent with the existing setup.
-No new dependencies without checking existing manifests first.
+<SPEC_CONTENT>
 ```
 
 Confirm: "Created `<path>` — covers `<SPEC_DIR>`"
