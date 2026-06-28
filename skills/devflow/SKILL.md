@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] <task> | /devflow status
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] <task> | /devflow status | /devflow config [get <key> | set <key> <value>]
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -462,13 +462,115 @@ Omit the Tip line for generic stack.
 
 ---
 
+## Subcommand: config
+
+Triggered when `$SUBCMD = config`.
+
+If `.devflow.yaml` does not exist, respond: "No .devflow.yaml found. Run /devflow init first." and stop.
+
+This is an **interactive wizard**. Read the current `.devflow.yaml`, then guide the user through reviewing and changing settings conversationally — one group at a time. Do not dump raw YAML. Do not process `get`/`set` as flags — just run the wizard.
+
+---
+
+### Step 1 — Read current config
+
+Read all fields from `.devflow.yaml` using yq (or grep fallback).
+
+### Step 2 — Show summary and open the wizard
+
+Display current values in a friendly, readable format:
+
+```
+DevFlow config — current settings
+
+  Base branch:    main
+  Plan model:     claude-opus-4-8
+  Exec model:     claude-sonnet-4-6
+
+  Commands:
+    test:   flutter test
+    lint:   flutter analyze
+    build:  (not set)
+    deploy: (not set)
+
+  Fan-out:    disabled
+  Auto PR:    false
+  Fallback:   generic
+  Telemetry:  enabled → .devflow/runs/
+```
+
+Then ask:
+
+"Which setting would you like to change? You can say the name (e.g. 'base branch', 'test command', 'auto pr') or type a number:
+
+  1. Base branch
+  2. Models (plan / execution)
+  3. Commands (test / lint / build / deploy)
+  4. Fan-out
+  5. Gates (auto PR / deploy / test gate / lint gate)
+  6. Fallback mode
+  7. Telemetry
+  8. Done"
+
+### Step 3 — Handle user selection
+
+Wait for user response, then guide them through the relevant setting:
+
+**1 — Base branch:** "Current: `<value>`. New value?" → update `base_branch`
+
+**2 — Models:** Ask plan model first ("Current plan model: `<value>`. New value or Enter to keep?"), then execution model.
+
+**3 — Commands:** Go through test, lint, build, deploy one by one. For each: show current value, ask for new value or Enter to keep. "(not set)" means the command is optional and currently absent — user can type a command or Enter to leave unset.
+
+**4 — Fan-out:** "Fan-out is currently `<enabled/disabled>`. Enable it? (y/n)" → if yes, ask max_agents and on_partial_failure.
+
+**5 — Gates:** Go through auto_pr, deploy_before_pr, require_tests_pass, require_lint_pass. For booleans: show current, ask "y/n or Enter to keep".
+
+**6 — Fallback mode:** "Current: `<generic/refuse>`. Change to `<the other option>`? (y/n)"
+
+**7 — Telemetry:** "Telemetry is `<enabled/disabled>`. Toggle? (y/n)" → if enabled, also ask path.
+
+**8 — Done:** Stop the wizard.
+
+### Step 4 — Apply changes
+
+After collecting all changes for the selected group, update `.devflow.yaml` using:
+
+For string values:
+```bash
+yq e -i ".<key> = \"<value>\"" .devflow.yaml
+```
+
+For boolean values:
+```bash
+yq e -i ".<key> = <true|false>" .devflow.yaml
+```
+
+If yq is not available, write the full file manually with the updated values using the Write tool.
+
+### Step 5 — Confirm and loop
+
+After applying, show what changed:
+```
+Updated:
+  commands.lint = flutter analyze
+  gates.auto_pr = true
+```
+
+Then ask: "Anything else to change? (number or 'done')" — loop back to Step 3 until user says done or types 8.
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, or `status`, respond:
+If `$SUBCMD` is not `init`, `start`, `status`, or `config`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow init
-  /devflow start <task description>
+  /devflow start [--auto-pr] <task description>
   /devflow status
+  /devflow config
+  /devflow config get <key>
+  /devflow config set <key> <value>
 ```
