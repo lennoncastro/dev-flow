@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow history | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -1493,9 +1493,84 @@ gh pr view "$BRANCH" --web 2>/dev/null || echo "No PR found for branch ${BRANCH}
 
 ---
 
+## Subcommand: history
+
+Triggered when `$SUBCMD = history`. Optional flags in `$SUBARGS`.
+
+Show all DevFlow runs with filtering and richer output than `status`.
+
+### Step 1 — Parse flags
+
+```bash
+FILTER_STATUS=""
+FILTER_SINCE=""
+FILTER_TASK=""
+echo "$SUBARGS" | grep -q -- '--status=' && FILTER_STATUS=$(echo "$SUBARGS" | grep -o -- '--status=[^ ]*' | cut -d= -f2)
+echo "$SUBARGS" | grep -q -- '--since=' && FILTER_SINCE=$(echo "$SUBARGS" | grep -o -- '--since=[^ ]*' | cut -d= -f2)
+echo "$SUBARGS" | grep -q -- '--task=' && FILTER_TASK=$(echo "$SUBARGS" | grep -o -- '--task=[^ ]*' | cut -d= -f2)
+```
+
+### Step 2 — Find telemetry dir
+
+```bash
+TELEMETRY_DIR=".devflow/runs"
+if [ -f ".devflow.yaml" ]; then
+  CONFIGURED=$(grep -E '^  path:' .devflow.yaml | awk '{print $2}' | tr -d '"' | tr -d "'" || true)
+  [ -n "$CONFIGURED" ] && TELEMETRY_DIR="$CONFIGURED"
+fi
+```
+
+If no `.jsonl` files found: "No DevFlow runs found in `$TELEMETRY_DIR`." and stop.
+
+### Step 3 — Read and filter all runs
+
+For each `.jsonl` in `$TELEMETRY_DIR`:
+
+```bash
+for file in "$TELEMETRY_DIR"/*.jsonl; do
+  run_id=$(basename "$file" .jsonl)
+  task=$(grep '"event":"start"' "$file" | head -1 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("task",""))' 2>/dev/null | sed 's/task=//' || true)
+  start_ts=$(grep '"event":"start"' "$file" | head -1 | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ts",""))' 2>/dev/null || true)
+  last_line=$(tail -1 "$file")
+  last_event=$(echo "$last_line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event",""))' 2>/dev/null || true)
+  last_status=$(echo "$last_line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
+  phases_count=$(grep '"event":"phase"' "$file" 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+done
+```
+
+Apply filters:
+- `$FILTER_STATUS=failed` → skip if `$last_event != "fail"`
+- `$FILTER_STATUS=success` → skip if `$last_event != "stop"` or `$last_status != "success"`
+- `$FILTER_STATUS=running` → skip if `$last_event` is `stop` or `fail`
+- `$FILTER_TASK` non-empty → skip if `$task` does not contain `$FILTER_TASK` (case-insensitive)
+- `$FILTER_SINCE` non-empty → parse `7d`/`24h`/`30m` into seconds, skip if `$start_ts` is older than that threshold
+
+### Step 4 — Display
+
+```
+DevFlow history  (showing <N> runs)
+──────────────────────────────────────────────────────────────────
+  RUN ID                               TASK                        STATUS      PHASES  STARTED
+  <run_id truncated to 40chars>        <task truncated to 28chars> <icon>      <N>/8   <YYYY-MM-DD HH:MM>
+──────────────────────────────────────────────────────────────────
+<N> runs found. Use /devflow logs <run-id> for details.
+Filters: --status=<success|failed|running> --since=<7d|24h|30m> --task=<keyword>
+```
+
+Status icons:
+- `✅ done` → last_event=`stop` and status=`success`
+- `❌ failed` → last_event=`fail`
+- `⏳ running` → no `stop` or `fail` event yet
+
+Phases shown as `<phases_count>/8` (expected 8: plan, discover, execute, test, lint, review, pr, stop).
+
+If no runs match after filtering: "No runs found matching filters."
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, or `open`, respond:
+If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, `open`, or `history`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
@@ -1508,6 +1583,7 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow status [--watch]
   /devflow logs [run-id]
   /devflow open [run-id]
+  /devflow history [--status=<success|failed|running>] [--since=<7d|24h>] [--task=<keyword>]
   /devflow config
   /devflow specialist add
   /devflow doctor
