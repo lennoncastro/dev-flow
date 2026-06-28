@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id]
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -1221,6 +1221,106 @@ Then:
 
 ---
 
+## Subcommand: rollback
+
+Triggered when `$SUBCMD = rollback`. Optional run ID in `$SUBARGS`.
+
+Unlike `abort` (cancels in-progress runs), `rollback` undoes a **completed** run — deletes the remote branch (if not merged) and removes the worktree. Does not revert a merged PR.
+
+### Step 1 — Find the run
+
+```bash
+TELEMETRY_DIR=$(grep -A1 'path:' .devflow.yaml 2>/dev/null | tail -1 | awk '{print $2}' || echo ".devflow/runs/")
+if [ -n "$SUBARGS" ] && [ "$SUBARGS" != "$SUBCMD" ]; then
+  RUN_FILE="${TELEMETRY_DIR}/${SUBARGS}.jsonl"
+else
+  RUN_FILE=$(ls -t "${TELEMETRY_DIR}"*.jsonl 2>/dev/null | head -1)
+fi
+```
+
+If not found: "No run found. Use /devflow status to list runs." and stop.
+
+### Step 2 — Check run state
+
+```bash
+RUN_ID=$(basename "$RUN_FILE" .jsonl)
+LAST_EVENT=$(tail -1 "$RUN_FILE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event",""))' 2>/dev/null || true)
+```
+
+- If `$LAST_EVENT` is not `stop`: "Run `$RUN_ID` has not completed (last event: `$LAST_EVENT`). Use /devflow abort to cancel an in-progress run." and stop.
+- If `$LAST_EVENT` is `rollback`: "Run `$RUN_ID` was already rolled back." and stop.
+
+### Step 3 — Check if PR was merged
+
+```bash
+TASK_SLUG=$(echo "$RUN_ID" | sed 's/-[0-9]*$//')
+BRANCH="devflow/${TASK_SLUG}"
+PR_MERGED=false
+PR_NUMBER=$(gh pr list --head "$BRANCH" --state merged --json number -q '.[0].number' 2>/dev/null || true)
+[ -n "$PR_NUMBER" ] && PR_MERGED=true
+
+TASK=$(grep '"event":"start"' "$RUN_FILE" | head -1 | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task",""))' 2>/dev/null | sed 's/task=//' || true)
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE_PATH="${REPO_ROOT}/.devflow/worktrees/${TASK_SLUG}"
+WORKTREE_INFO="$WORKTREE_PATH"
+[ ! -d "$WORKTREE_PATH" ] && WORKTREE_INFO="already removed"
+BRANCH_INFO="not merged"
+[ "$PR_MERGED" = true ] && BRANCH_INFO="merged into main via PR #${PR_NUMBER}"
+```
+
+### Step 4 — Confirm
+
+Show:
+
+```
+Rollback run <RUN_ID>?
+  Task:      <TASK>
+  Branch:    devflow/<TASK_SLUG>  (<BRANCH_INFO>)
+  Worktree:  <WORKTREE_INFO>
+
+This will: delete remote branch (if not merged), remove worktree, mark as rolled back.
+```
+
+If `$PR_MERGED=true`, also show:
+
+```
+⚠  PR #<PR_NUMBER> was merged — branch deletion only, code changes remain in main.
+```
+
+Then: `Proceed? (y/N)` — wait for confirmation. If not `y`/`yes`: "Rollback cancelled." and stop.
+
+### Step 5 — Execute rollback
+
+Delete remote branch if not merged:
+
+```bash
+if [ "$PR_MERGED" = false ]; then
+  git push origin --delete "$BRANCH" 2>/dev/null || true
+fi
+```
+
+Remove worktree:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/worktree-cleanup.sh" "$TASK_SLUG"
+```
+
+Log:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=rollback" "reason=user_rollback" "pr_merged=${PR_MERGED}"
+```
+
+### Step 6 — Report
+
+```
+Run <RUN_ID> rolled back.
+  Branch:   devflow/<TASK_SLUG> deleted  (or "already merged — not deleted")
+  Worktree: removed  (or "not found — nothing to remove")
+```
+
+---
+
 ## Subcommand: clean
 
 Triggered when `$SUBCMD = clean`.
@@ -1324,7 +1424,7 @@ Cleaned:
 
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, or `clean`, respond:
+If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, or `rollback`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
@@ -1333,6 +1433,7 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow plan <task description>
   /devflow retry [run-id]
   /devflow abort [run-id]
+  /devflow rollback [run-id]
   /devflow status
   /devflow logs [run-id]
   /devflow config
