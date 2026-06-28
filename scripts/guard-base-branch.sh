@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
+COMMAND=$(echo "${CLAUDE_TOOL_INPUT:-}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("command",""))' 2>/dev/null || true)
 
 # Only inspect git commands
 if ! echo "$COMMAND" | grep -qE '^\s*git\s'; then
