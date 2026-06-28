@@ -1,14 +1,12 @@
 # DevFlow
 
-> **Status:** Pre-release — self-hosted marketplace available.
+> **Status:** In marketplace review.
 
-A Claude Code plugin that packages a complete AI-assisted development workflow. Stack-agnostic: the plugin owns the orchestration engine; each project that installs it brings its own stack conventions via `.claude/agents/` subagents.
+A Claude Code plugin that packages a complete AI-assisted development workflow. Stack-agnostic: the motor orchestrates; each project brings its own stack conventions via `.claude/agents/` specialists.
 
 ## Installation
 
 ### Option A — Via marketplace (recommended)
-
-One-time global setup. `/devflow` becomes available in all projects.
 
 **Step 1** — Add to `~/.claude/settings.json`:
 
@@ -28,9 +26,9 @@ One-time global setup. `/devflow` becomes available in all projects.
 claude plugin install devflow@lennoncastro
 ```
 
-### Option B — Local project command (no setup needed)
+### Option B — Local project command
 
-No marketplace registration required. Works immediately in the project.
+No marketplace registration required.
 
 ```bash
 mkdir -p .claude/commands
@@ -38,86 +36,112 @@ curl -sL https://raw.githubusercontent.com/lennoncastro/dev-flow/main/skills/dev
   -o .claude/commands/devflow.md
 ```
 
-> **Note:** Adding `"plugins": [{ "source": { "source": "github", ... } }]` to `settings.json` does **not** download the plugin — it is a no-op for GitHub sources. Use Option A or B above.
-
-**Requirements:** Claude Code CLI, `git`, `gh` (GitHub CLI, authenticated), `jq`. `yq` is optional — scripts fall back to grep if absent.
-
-## Usage
-
-From any project with a `.devflow.yaml`:
-
-**Start a task:**
-
-```
-/devflow start add user authentication endpoint
-```
-
-DevFlow will:
-1. Validate `.devflow.yaml`
-2. Create an isolated git worktree from `base_branch`
-3. Plan the task
-4. Discover specialist agents by directory proximity
-5. Fan-out execution to specialists
-6. Run test and lint gates
-7. Self-review
-8. Open a PR (and optionally deploy)
-9. Clean up the worktree
-
-**Check run status:**
-
-```
-/devflow status
-```
-
-Shows all runs from `.devflow/runs/*.jsonl` — run ID, last event, status, timestamp.
-
-## Creating a specialist
-
-Add a `.claude/agents/<name>.md` anywhere in your repo. No declaration needed — placement is the routing signal.
-
-```markdown
----
-name: node-api
-description: Node.js API specialist for this project
----
-
-Follow the existing Express patterns in src/routes/.
-Use the project's validation middleware (src/middleware/validate.ts).
-Write tests with Vitest; place them alongside source files.
-Do not introduce new dependencies without checking package.json first.
-```
-
-See [`docs/specialist-contract.md`](docs/specialist-contract.md) for the full format spec.
-
-## Problem
-
-Every team that adopts AI-assisted development ends up reinventing the same orchestration: create a branch, plan the work, execute with the right model, run tests, review, deploy, open a PR. DevFlow packages that loop into a versioned, installable plugin — so you configure once and stop rebuilding the scaffolding.
-
-## How it works
-
-Three layers with independent lifecycles:
-
-| Layer | Lives in | Owns |
-|---|---|---|
-| **Motor** | Plugin hooks/scripts | Orchestration — worktree, plan, fan-out, gates |
-| **Patterns** | Project's `.claude/agents/` | Stack conventions — idioms, linting rules, review standards |
-| **Spec** | External tool (`spec.tool`) | Optional spec management |
-
-The motor has zero knowledge of any stack. All variable config comes from `.devflow.yaml`; all stack rules come from specialists discovered in the project.
-
-## Workflow cycle
-
-```
-worktree (from base_branch) → plan → fan-out execution → test → lint → review → deploy* → PR
-```
-
-`*` Deploy position is controlled by `gates.deploy_before_pr` (default `false` — PR approval is the gate).
+**Requirements:** Claude Code CLI, `git`, `gh` (authenticated), `jq`. `yq` optional — scripts fall back to grep.
 
 ## Quick start
 
-### 1. Add `.devflow.yaml` to your project root
+```bash
+# 1. Initialize DevFlow in your project
+/devflow init
 
-Minimal config:
+# 2. Run a task
+/devflow start add user authentication endpoint
+
+# 3. Check run status
+/devflow status
+```
+
+`init` detects your stack, writes `.devflow.yaml`, and creates a starter specialist in `.claude/agents/`.
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `/devflow init` | Detect stack, generate `.devflow.yaml` and starter specialist |
+| `/devflow start <task>` | Run the full workflow for a task |
+| `/devflow plan <task>` | Plan only — no execution, no PR |
+| `/devflow queue <t1> && <t2>` | Run multiple tasks in sequence |
+| `/devflow retry [run-id]` | Retry from the failed phase |
+| `/devflow pause [run-id]` | Pause a run after the current phase |
+| `/devflow resume [run-id]` | Resume a paused run |
+| `/devflow abort [run-id]` | Cancel a run and log failure |
+| `/devflow status [--watch]` | Show status of all runs |
+| `/devflow logs [run-id]` | Show phase timeline for a run |
+| `/devflow open [run-id]` | Open the run's PR in the browser |
+| `/devflow diff [run-id]` | Show git diff of the run's worktree |
+| `/devflow history` | Full run history with filters |
+| `/devflow config [show]` | Edit or view `.devflow.yaml` |
+| `/devflow specialist add` | Add a specialist (gallery or custom) |
+| `/devflow specialist validate` | Lint all `.claude/agents/` files |
+| `/devflow doctor` | Check config, tools, scripts, worktrees |
+| `/devflow clean` | Remove stale worktrees |
+| `/devflow rollback [run-id]` | Revert a run's changes |
+| `/devflow gc [--older-than=Nd]` | Delete old telemetry files |
+| `/devflow update` | Sync plugin to latest version |
+
+`/devflow start` flags: `--auto-pr` (open PR without confirmation), `--dry-run` (plan only, no worktree).
+
+`/devflow history` filters: `--status=<success\|failed\|running>`, `--since=<7d\|24h>`, `--task=<keyword>`.
+
+## Workflow
+
+```
+worktree (from base_branch) → plan → discover specialists → fan-out execution
+  → test gate → lint gate → diff review → open PR → CI polling → cleanup
+```
+
+Each phase is logged to `.devflow/runs/<run-id>.jsonl`.
+
+## Bug workflow
+
+Bugs use the same command — no special mode needed:
+
+```
+/devflow start "fix: login button unresponsive after token refresh"
+```
+
+The specialist handles investigation. A good specialist for bug-prone code includes a `## Debugging` section that tells the motor to reproduce before fixing:
+
+```markdown
+## Debugging
+
+When the task starts with "fix:", before writing any code:
+1. Reproduce the error — add a failing test or run the scenario manually
+2. Identify the root cause from logs or stack trace
+3. Fix, then confirm the reproduction step now passes
+```
+
+The motor passes the task to the specialist — the specialist decides how to investigate. Different stacks debug differently: Flutter reads logs, Django checks tracebacks, Postgres runs `EXPLAIN ANALYZE`. That knowledge lives in the specialist, not the motor.
+
+## Specialists
+
+Specialists live in `.claude/agents/<name>.md`. No declaration in config — placement is the routing signal.
+
+```markdown
+---
+name: backend
+description: Node.js API specialist
+---
+
+Follow existing Express patterns in src/routes/.
+Use the project's validation middleware.
+Write tests with Vitest alongside source files.
+No new dependencies without checking package.json first.
+
+## Debugging
+
+When the task starts with "fix:", reproduce the error first.
+Check logs in logs/ or run with DEBUG=* to capture the trace.
+Write a failing test before touching the fix.
+```
+
+Create specialists with `/devflow specialist add` (includes gallery of templates for React, Next.js, FastAPI, Django, Flutter, etc.) or write manually following [`agents/example.md`](agents/example.md).
+
+See [`docs/specialist-contract.md`](docs/specialist-contract.md) for the full format spec.
+
+## Configuration
+
+Minimal `.devflow.yaml`:
 
 ```yaml
 version: 1
@@ -127,110 +151,50 @@ models:
   execution: claude-sonnet-4-6
 commands:
   test: npm test
-```
-
-Full config with all optional fields:
-
-```yaml
-version: 1
-base_branch: develop
-models:
-  plan: claude-opus-4-8
-  execution: claude-sonnet-4-6
-commands:
-  test: npm test
-  lint: npm run lint
-  deploy: npm run deploy:preview
-fan_out:
-  enabled: true
-  max_agents: 4
-  on_partial_failure: isolate   # abort | isolate | retry
-gates:
-  deploy_before_pr: false
-spec:
-  tool: openspec
 fallback:
-  mode: generic                 # generic | refuse
+  mode: generic
+telemetry:
+  enabled: true
 ```
 
-### 3. Install the plugin
+Full reference: [`docs/devflow-schema.md`](docs/devflow-schema.md).
 
-```
-claude plugin install github:lennoncastro/dev-flow
-```
+## How it works
 
-### 4. Run your first task
+Three layers with independent lifecycles:
 
-```
-/devflow start your task description here
-```
+| Layer | Lives in | Owns |
+|---|---|---|
+| **Motor** | Plugin hooks/scripts | Orchestration — worktree, plan, fan-out, gates |
+| **Patterns** | Project's `.claude/agents/` | Stack conventions, debugging approach, review standards |
+| **Config** | `.devflow.yaml` | Per-project variables (branch, models, commands, limits) |
 
-### 2. Add specialists where they make sense
-
-No declaration required. Place agent files anywhere in your repo — the motor discovers them by directory proximity:
-
-```
-your-repo/
-  .devflow.yaml
-  apps/
-    api/
-      .claude/agents/backend.md    # discovered for tasks touching apps/api/
-    web/
-      .claude/agents/frontend.md  # discovered for tasks touching apps/web/
-  .claude/agents/generic.md        # fallback for everything else
-```
+The motor has zero knowledge of any stack. All variable config comes from `.devflow.yaml`; all stack rules come from discovered specialists.
 
 ## Specialist discovery
 
-Before spawning executors, the motor walks the directory tree from each task-touched path upward, collecting `.claude/agents/` files. This is deterministic — a filesystem walk, not a model decision.
+The motor walks upward from each task-touched path, collecting `.claude/agents/` files. Deterministic — filesystem walk, not model choice.
 
-- **One scope touched** → one specialist activated
-- **Multiple scopes** (monorepo / cross-cutting task) → fan-out, one agent per scope, capped by `fan_out.max_agents`
-- **No agent found** → applies `fallback` (generic agent or refuse)
-
-No `specialists:` block in config. Create agents where they make sense; the rest falls to the fallback.
-
-## Configuration reference
-
-| Field | Required | Default | Notes |
-|---|---|---|---|
-| `version` | yes | — | Schema version. Motor rejects incompatible values. |
-| `base_branch` | yes | — | Worktrees are created from this branch. Motor never operates directly on it. |
-| `models.plan` | yes | — | Model for the plan phase. |
-| `models.execution` | yes | — | Model for execution / fan-out. |
-| `models.review` | no | = `plan` | Model for the review phase. |
-| `commands.test` | yes | — | Test suite command. |
-| `commands.lint` | no | — | Skipped if absent. |
-| `commands.build` | no | — | Skipped if absent. |
-| `commands.deploy` | no | — | No deploy step if absent. |
-| `fan_out.enabled` | no | `false` | Enables parallel execution. |
-| `fan_out.max_agents` | no | `1` | Cap on parallel agents. |
-| `fan_out.on_partial_failure` | no | `abort` | `abort` / `isolate` / `retry` |
-| `gates.deploy_before_pr` | no | `false` | `true` = preview deploy before PR; `false` = PR approval is the gate. |
-| `gates.require_tests_pass` | no | `true` | Blocks PR if tests fail. |
-| `fallback.mode` | no | `generic` | `generic` uses the plugin's example agent; `refuse` stops and asks for a specialist. |
-| `limits.max_tokens_per_run` | no | `0` | `0` = no limit. Recommended in distributed environments. |
-| `telemetry.enabled` | no | `true` | Writes JSONL run logs to `telemetry.path`. |
-| `telemetry.path` | no | `.devflow/runs/` | Directory for run logs. |
-
-Full annotated schema: [`docs/devflow-schema.md`](docs/devflow-schema.md).
+- One scope → one specialist
+- Multiple scopes (monorepo) → fan-out, one agent per scope, capped by `fan_out.max_agents`
+- No agent found → `fallback.mode` applies (`generic` or `refuse`)
 
 ## Roadmap
 
-1. Schema defined — `docs/devflow-schema.md` ✓
-2. Specialist contract (format, discovery, routing, fallback) ✓
-3. Motor hooks (parameterized, idempotent worktree cleanup) ✓
-4. Run telemetry (JSONL → `.devflow/runs/`) ✓
-5. Dogfood on single-stack fixture end-to-end ✓
-6. Generalize for monorepo + fallback
-7. Repo-fixtures + CI gate (required before any `git tag`)
-8. Example specialist (illustrates format, no stack opinions) ✓
-9. Package and publish to marketplace
+1. Schema defined ✓
+2. Specialist contract ✓
+3. Motor hooks ✓
+4. Run telemetry ✓
+5. Dogfood on single-stack fixture ✓
+6. Generalize for monorepo + fallback ✓
+7. Repo fixtures + CI gate ✓
+8. Example specialist ✓
+9. Publish to marketplace — in review
 
 ## Contributing
 
 **Golden rule: nothing project-specific in hooks.**
 
-The motor must have zero hardcoded branches, commands, models, or stack conventions. Everything that varies between projects lives in `.devflow.yaml` or in the project's own specialist agents. Any project-specific detail inside the motor kills replicability and breaks the plugin's contract.
+The motor must have zero hardcoded branches, commands, models, or stack conventions. Everything that varies between projects lives in `.devflow.yaml` or in the project's own specialist agents.
 
 See [`docs/devflow-plugin-plan.md`](docs/devflow-plugin-plan.md) for full architecture rationale.
