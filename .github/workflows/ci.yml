@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+      - name: Run shellcheck on all scripts
+        run: shellcheck scripts/*.sh
+
+  validate-configs:
+    name: Validate fixture configs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yq
+        run: pip install yq
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+      - name: Validate single-stack config
+        run: scripts/validate-config.sh fixtures/single-stack/.devflow.yaml
+      - name: Validate monorepo config
+        run: scripts/validate-config.sh fixtures/monorepo/.devflow.yaml
+      - name: Validate fallback config
+        run: scripts/validate-config.sh fixtures/fallback/.devflow.yaml
+      - name: Validate fallback-refuse config
+        run: scripts/validate-config.sh fixtures/fallback-refuse/.devflow.yaml
+
+  discover-routing:
+    name: Specialist discovery routing
+    runs-on: ubuntu-latest
+    needs: validate-configs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+      - name: Single-stack — specialist found
+        run: |
+          OUTPUT=$(scripts/discover-specialists.sh fixtures/single-stack/some/file.ts)
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -q "fixtures/single-stack/.claude/agents/specialist.md" || \
+            { echo "Expected specialist.md in output"; exit 1; }
+      - name: Monorepo — api scope
+        run: |
+          OUTPUT=$(scripts/discover-specialists.sh fixtures/monorepo/apps/api/src/index.ts)
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -q "apps/api" || \
+            { echo "Expected apps/api specialist in output"; exit 1; }
+      - name: Monorepo — web scope
+        run: |
+          OUTPUT=$(scripts/discover-specialists.sh fixtures/monorepo/apps/web/src/App.tsx)
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -q "apps/web" || \
+            { echo "Expected apps/web specialist in output"; exit 1; }
+      - name: Fallback — no specialist found (expect exit 1)
+        run: |
+          set +e
+          scripts/discover-specialists.sh fixtures/fallback/src/main.ts
+          EXIT=$?
+          set -e
+          [ "$EXIT" -eq 1 ] || { echo "Expected exit 1 from discover-specialists for fallback fixture, got $EXIT"; exit 1; }
+
+  validate-schema-negative:
+    name: Schema validation — negative tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yq
+        run: pip install yq
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+      - name: Reject config missing required fields
+        run: |
+          cat > /tmp/invalid-missing.yaml <<'EOF'
+          version: 1
+          base_branch: main
+          EOF
+          set +e
+          scripts/validate-config.sh /tmp/invalid-missing.yaml
+          EXIT=$?
+          set -e
+          [ "$EXIT" -eq 1 ] || { echo "Expected exit 1 for config missing models/commands, got $EXIT"; exit 1; }
+      - name: Reject fan_out with max_agents 0
+        run: |
+          cat > /tmp/invalid-fanout.yaml <<'EOF'
+          version: 1
+          base_branch: main
+          models:
+            plan: claude-opus-4-8
+            execution: claude-sonnet-4-6
+          commands:
+            test: npm test
+          fan_out:
+            enabled: true
+            max_agents: 0
+          EOF
+          set +e
+          scripts/validate-config.sh /tmp/invalid-fanout.yaml
+          EXIT=$?
+          set -e
+          [ "$EXIT" -eq 1 ] || { echo "Expected exit 1 for max_agents=0, got $EXIT"; exit 1; }
+      - name: Reject spec.require_approved without spec.tool
+        run: |
+          cat > /tmp/invalid-spec.yaml <<'EOF'
+          version: 1
+          base_branch: main
+          models:
+            plan: claude-opus-4-8
+            execution: claude-sonnet-4-6
+          commands:
+            test: npm test
+          spec:
+            require_approved: true
+          EOF
+          set +e
+          scripts/validate-config.sh /tmp/invalid-spec.yaml
+          EXIT=$?
+          set -e
+          [ "$EXIT" -eq 1 ] || { echo "Expected exit 1 for spec.require_approved without spec.tool, got $EXIT"; exit 1; }

@@ -1,0 +1,12 @@
+version: 1
+base_branch: main
+models:
+  plan: claude-opus-4-8
+  execution: claude-sonnet-4-6
+commands:
+  test: echo "no tests"
+fallback:
+  mode: generic
+telemetry:
+  enabled: true
+  path: .devflow/runs/
