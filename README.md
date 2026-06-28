@@ -159,6 +159,8 @@ telemetry:
 
 Full reference: [`docs/devflow-schema.md`](docs/devflow-schema.md).
 
+> **VSCode:** add `# yaml-language-server: $schema=https://raw.githubusercontent.com/lennoncastro/dev-flow/main/schema.json` to the top of `.devflow.yaml` for autocomplete and inline validation.
+
 ## How it works
 
 Three layers with independent lifecycles:
