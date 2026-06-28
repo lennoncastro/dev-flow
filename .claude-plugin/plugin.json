@@ -11,7 +11,7 @@
   "license": "MIT",
   "keywords": ["workflow", "automation", "development"],
   "category": "productivity",
-  "commands": ["./commands/devflow/"],
+  "skills": "./skills/",
   "agents": ["./agents/generic.md"],
   "hooks": "./hooks/hooks.json"
 }
