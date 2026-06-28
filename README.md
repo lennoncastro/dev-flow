@@ -1,23 +1,27 @@
 # DevFlow
 
-> **Status:** Pre-release — implementation complete, not yet published to marketplace.
+> **Status:** Pre-release — published via self-hosted marketplace.
 
 A Claude Code plugin that packages a complete AI-assisted development workflow. Stack-agnostic: the plugin owns the orchestration engine; each project that installs it brings its own stack conventions via `.claude/agents/` subagents.
 
 ## Installation
 
-```
-claude plugin install github:lennoncastro/dev-flow
-```
-
-Or add to your project's `.claude/settings.json`:
+**Step 1** — Register the marketplace once in `~/.claude/settings.json`:
 
 ```json
 {
-  "plugins": [
-    { "name": "devflow", "source": { "source": "github", "repo": "lennoncastro/dev-flow" } }
-  ]
+  "extraKnownMarketplaces": {
+    "lennoncastro": {
+      "source": { "source": "github", "repo": "lennoncastro/dev-flow" }
+    }
+  }
 }
+```
+
+**Step 2** — Install:
+
+```
+claude plugin install devflow@lennoncastro
 ```
 
 **Requirements:** Claude Code CLI, `git`, `gh` (GitHub CLI, authenticated), `jq`. `yq` is optional — scripts fall back to grep if absent.
