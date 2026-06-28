@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow update
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -1118,9 +1118,95 @@ Then:
 
 ---
 
+## Subcommand: update
+
+Triggered when `$SUBCMD = update`.
+
+Syncs the active plugin cache from the local source repo.
+
+### Step 1 — Find cache root
+
+```bash
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  CACHE_ROOT=$(dirname "${CLAUDE_PLUGIN_ROOT}")
+else
+  CACHE_ROOT=$(ls -d ~/.claude/plugins/cache/lennoncastro/devflow/*/ 2>/dev/null | tail -1)
+fi
+```
+
+If not found: "Plugin cache not found. Is devflow installed? Run: claude plugin install lennoncastro/devflow" and stop.
+
+### Step 2 — Find source root
+
+```bash
+SOURCE_ROOT=""
+[ -n "${DEVFLOW_SOURCE:-}" ] && SOURCE_ROOT="$DEVFLOW_SOURCE"
+[ -z "$SOURCE_ROOT" ] && [ -d "$HOME/development/projects/ia/devflow/.git" ] && SOURCE_ROOT="$HOME/development/projects/ia/devflow"
+```
+
+If `$SOURCE_ROOT` is still empty: "Source repo not found. Set DEVFLOW_SOURCE=/path/to/devflow and retry." and stop.
+
+### Step 3 — Pull latest source
+
+```bash
+git -C "$SOURCE_ROOT" pull origin main 2>&1 || true
+```
+
+Show the git output. If pull fails, show a warning but continue using the current source state.
+
+### Step 4 — Show diff summary
+
+```bash
+CACHED_SKILL="${CACHE_ROOT}/skills/devflow/SKILL.md"
+SOURCE_SKILL="${SOURCE_ROOT}/skills/devflow/SKILL.md"
+DIFF_LINES=$(diff "$CACHED_SKILL" "$SOURCE_SKILL" 2>/dev/null | grep -c '^[<>]' || echo 0)
+```
+
+Show:
+
+```
+DevFlow update
+  Source: <SOURCE_ROOT>
+  Cache:  <CACHE_ROOT>
+  Changes: <DIFF_LINES> lines differ
+```
+
+If `$DIFF_LINES = 0`: "Cache is already up to date." and stop.
+
+### Step 5 — Confirm and sync
+
+```
+Files to sync:
+  skills/devflow/SKILL.md
+  scripts/*.sh
+  hooks/hooks.json
+  agents/generic.md
+
+Sync now? (y/N)
+```
+
+Wait for user confirmation. If not `y` or `yes`: stop silently.
+
+On confirmation:
+
+```bash
+cp -r "${SOURCE_ROOT}/skills/" "${CACHE_ROOT}/"
+cp -r "${SOURCE_ROOT}/scripts/" "${CACHE_ROOT}/"
+cp -r "${SOURCE_ROOT}/hooks/" "${CACHE_ROOT}/"
+cp -r "${SOURCE_ROOT}/agents/" "${CACHE_ROOT}/" 2>/dev/null || true
+```
+
+### Step 6 — Report
+
+```
+Updated. Restart Claude Code for changes to take effect.
+```
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, or `doctor`, respond:
+If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, or `update`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
@@ -1133,4 +1219,5 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow config
   /devflow specialist add
   /devflow doctor
+  /devflow update
 ```
