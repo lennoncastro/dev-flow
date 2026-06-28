@@ -914,6 +914,10 @@ Follow existing widget patterns in lib/. Use StatelessWidget unless state is nee
 Colocate tests in test/ mirroring lib/ structure.
 No new pub dependencies without checking pubspec.yaml first.
 Run `flutter analyze` before considering a change done.
+
+## Debugging
+Before fixing a bug: reproduce it with `flutter run` and capture the full stack trace.
+Check `flutter logs` for device output. Write a failing test that reproduces the issue before changing any production code.
 ```
 
 **typescript** → `.claude/agents/typescript.md`:
@@ -927,6 +931,10 @@ TypeScript strict mode. Follow existing tsconfig.json settings.
 Prefer functional patterns. Follow existing folder structure in src/.
 Write tests alongside source files using the existing test runner.
 No new dependencies without checking package.json first.
+
+## Debugging
+Before fixing a bug: reproduce it with the existing test runner or a minimal script.
+Check error stack traces for the originating file and line. Write a failing test first, then fix.
 ```
 
 **node** → `.claude/agents/node.md`:
@@ -940,6 +948,10 @@ Follow existing code style and folder structure.
 Write tests alongside source files using the existing test runner.
 No new dependencies without checking package.json first.
 Prefer async/await over callbacks.
+
+## Debugging
+Before fixing a bug: reproduce it with the existing test runner or a minimal script.
+Check error stack traces for the originating file and line. Write a failing test first, then fix.
 ```
 
 **python** → `.claude/agents/python.md`:
@@ -953,6 +965,10 @@ Follow PEP 8 and existing code style. Use type hints throughout.
 Follow existing project structure. Write tests in tests/ with pytest.
 No new dependencies without checking pyproject.toml or requirements.txt first.
 Use existing virtual environment conventions.
+
+## Debugging
+Before fixing a bug: reproduce it with `pytest -xvs` or a minimal script.
+Read the full traceback — focus on the last non-library frame. Write a failing test first, then fix.
 ```
 
 **go** → `.claude/agents/golang.md`:
@@ -966,6 +982,10 @@ Follow standard Go conventions and existing package structure.
 Error handling: always check and wrap errors with context.
 Write table-driven tests in *_test.go files alongside source.
 No new module dependencies without checking go.mod first.
+
+## Debugging
+Before fixing a bug: reproduce it with `go test -run TestName -v` or a minimal main.
+Read the error message fully before touching code. Write a failing test case first.
 ```
 
 **rust** → `.claude/agents/rust.md`:
@@ -979,6 +999,10 @@ Follow existing module structure. Use idiomatic Rust — prefer iterators, avoid
 Write tests in the same file under #[cfg(test)].
 No new crate dependencies without checking Cargo.toml first.
 Run `cargo clippy` before considering a change done.
+
+## Debugging
+Before fixing a bug: reproduce it with `cargo test -- --nocapture` or a minimal example.
+Read the full compiler/runtime error. Write a failing test first, then fix.
 ```
 
 **android** → `.claude/agents/android.md`:
@@ -992,6 +1016,10 @@ Follow existing Kotlin code style and architecture patterns.
 Use existing dependency injection setup. Write unit tests with JUnit.
 No new Gradle dependencies without checking build.gradle first.
 Run `./gradlew lint` before considering a change done.
+
+## Debugging
+Before fixing a bug: reproduce it via `./gradlew test` or Logcat on device.
+Capture the stack trace from Logcat. Write a failing unit test first, then fix.
 ```
 
 **generic** → `.claude/agents/generic-specialist.md`:
@@ -1005,6 +1033,10 @@ Read existing code patterns before writing anything.
 Follow the conventions already established in the codebase.
 Write tests consistent with the existing test setup.
 No new dependencies without checking existing manifests first.
+
+## Debugging
+Before fixing a bug: reproduce it reliably using the project's test runner or a minimal script.
+Capture the error output fully. Write a failing test that demonstrates the bug before changing code.
 ```
 
 ### Step 10 — Report
@@ -1280,6 +1312,10 @@ Use existing component patterns in src/components/. Co-locate tests with compone
 State: prefer local state; use context or Zustand only for cross-cutting concerns.
 No new npm packages without checking package.json first.
 Run `tsc --noEmit` before considering a change done.
+
+## Debugging
+Before fixing a bug: reproduce it in the browser with DevTools open (Console + Network tabs).
+Check for React error boundaries output. Write a failing test with the existing test runner first.
 ```
 description: `React/TypeScript specialist`
 
@@ -1289,6 +1325,10 @@ Next.js 14+ App Router. Use Server Components by default; add 'use client' only 
 Follow existing route structure in app/. API routes go in app/api/.
 Use next/image for images, next/link for navigation.
 No new packages without checking package.json first.
+
+## Debugging
+Before fixing a bug: reproduce it in the browser with DevTools open (Console + Network tabs).
+Check for React error boundaries output. Write a failing test with the existing test runner first.
 ```
 description: `Next.js App Router specialist`
 
@@ -1298,6 +1338,10 @@ FastAPI with Pydantic v2 and async endpoints. Follow existing router structure.
 Use dependency injection for DB sessions. All endpoints must have response_model.
 Write tests in tests/ using pytest and httpx AsyncClient.
 No new dependencies without checking pyproject.toml first.
+
+## Debugging
+Before fixing a bug: reproduce it with the existing test client or curl.
+Read the full server error/traceback. Write a failing test first, then fix.
 ```
 description: `FastAPI specialist`
 
@@ -1307,6 +1351,10 @@ Django with Django REST Framework. Follow existing app structure.
 Use class-based views or ViewSets. Serializers validate all input.
 Write tests in tests/ using Django TestCase or pytest-django.
 No new packages without checking requirements.txt first.
+
+## Debugging
+Before fixing a bug: reproduce it with the existing test client or curl.
+Read the full server error/traceback. Write a failing test first, then fix.
 ```
 description: `Django/DRF specialist`
 
@@ -1316,6 +1364,10 @@ Express.js with async/await. Follow existing router and middleware structure.
 Validate all input with existing validation library. Return consistent error shapes.
 Write tests with existing test runner (check package.json scripts).
 No new packages without checking package.json first.
+
+## Debugging
+Before fixing a bug: reproduce it with the existing test client or curl.
+Read the full server error/traceback. Write a failing test first, then fix.
 ```
 description: `Node.js/Express specialist`
 
@@ -1326,6 +1378,10 @@ Follow existing widget patterns in lib/. Use StatelessWidget unless state is nee
 Colocate tests in test/ mirroring lib/ structure.
 No new pub dependencies without checking pubspec.yaml first.
 Run `flutter analyze` before considering a change done.
+
+## Debugging
+Before fixing a bug: reproduce it with `flutter run` and capture the full stack trace.
+Check `flutter logs` for device output. Write a failing test that reproduces the issue before changing any production code.
 ```
 description: `Flutter/Dart specialist`
 
@@ -1335,6 +1391,10 @@ SwiftUI with Combine. Follow existing MVVM structure.
 Use @StateObject for owned models, @ObservedObject for injected.
 Write unit tests in *Tests target. UI tests only for critical flows.
 No new Swift packages without checking Package.swift or Podfile first.
+
+## Debugging
+Before fixing a bug: reproduce it on simulator with Xcode console open.
+Capture the crash log or assertion output. Write a failing unit test first.
 ```
 description: `SwiftUI/iOS specialist`
 
@@ -1344,6 +1404,10 @@ Kotlin with Jetpack Compose. Follow existing architecture (ViewModel + Repositor
 Use Hilt for DI if already set up. Write unit tests with JUnit + MockK.
 No new Gradle dependencies without checking build.gradle first.
 Run `./gradlew lint` before considering a change done.
+
+## Debugging
+Before fixing a bug: reproduce it via `./gradlew test` or Logcat on device.
+Capture the stack trace from Logcat. Write a failing unit test first, then fix.
 ```
 description: `Android/Kotlin specialist`
 
@@ -1353,6 +1417,10 @@ PostgreSQL schema design and migrations. Follow existing migration tool conventi
 Always add indexes for foreign keys and frequent query columns.
 Write migrations as idempotent scripts. Never DROP without a rollback plan.
 Test queries with EXPLAIN ANALYZE before finalizing.
+
+## Debugging
+Before fixing a bug: reproduce the query issue with EXPLAIN ANALYZE.
+Check for unexpected sequential scans or index misses. Write a failing test query first.
 ```
 description: `PostgreSQL specialist`
 
