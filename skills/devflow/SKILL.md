@@ -786,6 +786,92 @@ Tip: the motor will discover this specialist automatically for tasks touching fi
 
 ---
 
+## Subcommand: abort
+
+Triggered when `$SUBCMD = abort`. Optional run ID in `$SUBARGS`.
+
+### Step 1 — Find the run
+
+```bash
+TELEMETRY_DIR=$(grep -A1 'path:' .devflow.yaml 2>/dev/null | tail -1 | awk '{print $2}' || echo ".devflow/runs/")
+if [ -n "$SUBARGS" ] && [ "$SUBARGS" != "$SUBCMD" ]; then
+  RUN_FILE="${TELEMETRY_DIR}/${SUBARGS}.jsonl"
+else
+  RUN_FILE=$(ls -t "${TELEMETRY_DIR}"*.jsonl 2>/dev/null | head -1)
+fi
+```
+
+If no file found: "No run found. Use /devflow status to list runs." and stop.
+
+Read the last event from the JSONL:
+
+```bash
+RUN_ID=$(basename "$RUN_FILE" .jsonl)
+LAST_EVENT=$(tail -1 "$RUN_FILE" | python3 -c 'import json,sys; e=json.load(sys.stdin); print(e.get("event",""))' 2>/dev/null || true)
+LAST_STATUS=$(tail -1 "$RUN_FILE" | python3 -c 'import json,sys; e=json.load(sys.stdin); print(e.get("status",""))' 2>/dev/null || true)
+```
+
+If `$LAST_EVENT` is `stop` or `$LAST_EVENT` is `abort`: "Run `$RUN_ID` is already finished (status: `$LAST_STATUS`). Nothing to abort." and stop.
+
+### Step 2 — Confirm
+
+Extract context from the JSONL:
+
+```bash
+TASK=$(grep '"event":"start"' "$RUN_FILE" | head -1 | python3 -c 'import json,sys; e=json.load(sys.stdin); print(e.get("task",""))' 2>/dev/null | sed 's/task=//' || true)
+LAST_PHASE=$(grep '"event":"phase"' "$RUN_FILE" | tail -1 | python3 -c 'import json,sys; e=json.load(sys.stdin); print(e.get("phase","unknown"))' 2>/dev/null || true)
+TASK_SLUG=$(echo "$RUN_ID" | sed 's/-[0-9]*$//')
+WORKTREE_PATH="${REPO_ROOT:-$(git rev-parse --show-toplevel)}/.devflow/worktrees/${TASK_SLUG}"
+WORKTREE_EXISTS="(not created)"
+[ -d "$WORKTREE_PATH" ] && WORKTREE_EXISTS="$WORKTREE_PATH"
+```
+
+Show:
+
+```
+Abort run <RUN_ID>?
+  Task:     <TASK>
+  Phase:    <LAST_PHASE>
+  Worktree: <WORKTREE_EXISTS>
+
+This will: log abort, delete worktree, delete remote branch (if pushed).
+Proceed? (y/N)
+```
+
+Wait for user confirmation. If N, empty, or anything other than `y`/`yes`: "Aborted. Run continues." and stop.
+
+### Step 3 — Log abort
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=abort" "reason=user_aborted"
+```
+
+### Step 4 — Clean up worktree
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/worktree-cleanup.sh" "$TASK_SLUG"
+```
+
+### Step 5 — Delete remote branch (if pushed)
+
+```bash
+BRANCH="devflow/${TASK_SLUG}"
+BRANCH_DELETED="not pushed — nothing to delete"
+if git ls-remote --heads origin "$BRANCH" 2>/dev/null | grep -q "$BRANCH"; then
+  git push origin --delete "$BRANCH" 2>/dev/null && BRANCH_DELETED="devflow/${TASK_SLUG}" || true
+fi
+```
+
+### Step 6 — Report
+
+```
+Run <RUN_ID> aborted.
+  Worktree removed: .devflow/worktrees/<TASK_SLUG>  (or "not found — nothing to remove")
+  Branch deleted:   <BRANCH_DELETED>
+```
+
+---
+
 ## Subcommand: doctor
 
 Triggered when `$SUBCMD = doctor`.
@@ -929,13 +1015,14 @@ Then:
 
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, `specialist`, or `doctor`, respond:
+If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, or `doctor`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow init
   /devflow start [--auto-pr] [--dry-run] <task description>
   /devflow retry [run-id]
+  /devflow abort [run-id]
   /devflow status
   /devflow logs [run-id]
   /devflow config
