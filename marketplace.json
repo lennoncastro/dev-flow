@@ -1,0 +1,22 @@
+{
+  "name": "lennoncastro",
+  "owner": {
+    "name": "Lennon Castro",
+    "email": "lennon.castro.92@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "devflow",
+      "source": {
+        "source": "github",
+        "repo": "lennoncastro/dev-flow"
+      },
+      "description": "AI-assisted development workflow plugin for Claude Code. Stack-agnostic orchestration: worktree isolation, plan/fan-out execution, test/lint gates, and automated PR.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Lennon Castro",
+        "email": "lennon.castro.92@gmail.com"
+      }
+    }
+  ]
+}
