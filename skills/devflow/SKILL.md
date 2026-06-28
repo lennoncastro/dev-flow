@@ -98,6 +98,8 @@ WORKTREE=$("${CLAUDE_PLUGIN_ROOT}/scripts/worktree-create.sh" "$TASK_SLUG" "$BAS
 
 If it exits non-zero, stop and show the error. All subsequent file operations happen inside `$WORKTREE`.
 
+Print: `DevFlow: working in worktree → <WORKTREE>`
+
 ### Step 6 — Plan
 
 Using model `$MODEL_PLAN`, produce a structured plan for the task. Identify:
@@ -187,7 +189,14 @@ If `ESTIMATED_TOKENS > MAX_TOKENS`:
 
 ### Step 9 — Test gate
 
-If `$CMD_TEST` is set, run it inside `$WORKTREE`. If it fails and `$GATE_TESTS=true`, log and stop.
+If `$CMD_TEST` is set, run it inside `$WORKTREE`. If it fails and `$GATE_TESTS=true`:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=test" "reason=tests_failed"
+if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} failed at test gate ❌"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Failed at test gate ❌" with title "DevFlow"'; fi; printf '\a'
+```
+
+Stop and report failure.
 
 **Run now before proceeding:**
 ```bash
@@ -196,7 +205,14 @@ If `$CMD_TEST` is set, run it inside `$WORKTREE`. If it fails and `$GATE_TESTS=t
 
 ### Step 10 — Lint gate
 
-If `$CMD_LINT` is set, run it inside `$WORKTREE`. If it fails and `$GATE_LINT=true`, log and stop.
+If `$CMD_LINT` is set, run it inside `$WORKTREE`. If it fails and `$GATE_LINT=true`:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=lint" "reason=lint_failed"
+if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} failed at lint gate ❌"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Failed at lint gate ❌" with title "DevFlow"'; fi; printf '\a'
+```
+
+Stop and report failure.
 
 **Run now before proceeding:**
 ```bash
@@ -323,6 +339,23 @@ If `$CMD_DEPLOY` is set and `$DEPLOY_BEFORE_PR=false`, run deploy after PR.
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/worktree-cleanup.sh" "$TASK_SLUG"
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" stop "$RUN_ID" "status=success"
+if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} done ✅"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Run done ✅" with title "DevFlow"'; fi; printf '\a'
+```
+
+Compute and display a cost summary from the telemetry JSONL:
+
+```bash
+TELEMETRY_FILE="${TELEMETRY_DIR}/${RUN_ID}.jsonl"
+PHASE_COUNT=$(grep -c '"event":"phase"' "$TELEMETRY_FILE" 2>/dev/null || echo 0)
+```
+
+Show:
+
+```
+DevFlow run complete ✅
+  Run ID:    <RUN_ID>
+  Phases:    <PHASE_COUNT> completed
+  PR:        <PR URL>
 ```
 
 Report the PR URL and a summary of phases completed.
