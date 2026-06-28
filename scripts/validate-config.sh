@@ -50,8 +50,9 @@ FAN_OUT_ENABLED=$(yq_get 'fan_out.enabled')
 if [ "$FAN_OUT_ENABLED" = "true" ]; then
   MAX_AGENTS=$(yq_get 'fan_out.max_agents')
   if [ -n "$MAX_AGENTS" ]; then
-    [[ "$MAX_AGENTS" =~ ^[0-9]+$ ]] && [ "$MAX_AGENTS" -ge 1 ] || \
+    if ! { [[ "$MAX_AGENTS" =~ ^[0-9]+$ ]] && [ "$MAX_AGENTS" -ge 1 ]; }; then
       fail "'fan_out.max_agents' must be >= 1 when fan_out is enabled (got: '${MAX_AGENTS}')"
+    fi
   fi
 
   ON_PARTIAL=$(yq_get 'fan_out.on_partial_failure')
@@ -62,8 +63,9 @@ if [ "$FAN_OUT_ENABLED" = "true" ]; then
     esac
     if [ "$ON_PARTIAL" = "retry" ]; then
       RETRY_LIMIT=$(yq_get 'fan_out.retry_limit')
-      [ -n "$RETRY_LIMIT" ] && [[ "$RETRY_LIMIT" =~ ^[0-9]+$ ]] && [ "$RETRY_LIMIT" -ge 1 ] || \
+      if ! { [ -n "$RETRY_LIMIT" ] && [[ "$RETRY_LIMIT" =~ ^[0-9]+$ ]] && [ "$RETRY_LIMIT" -ge 1 ]; }; then
         fail "'fan_out.retry_limit' must be >= 1 when on_partial_failure is 'retry' (got: '${RETRY_LIMIT}')"
+      fi
     fi
   fi
 fi

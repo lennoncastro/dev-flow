@@ -23,7 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install yq
-        run: pip install yq
+        run: |
+          wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
       - name: Validate single-stack config
@@ -75,15 +77,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install yq
-        run: pip install yq
+        run: |
+          wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
       - name: Make scripts executable
         run: chmod +x scripts/*.sh
       - name: Reject config missing required fields
         run: |
           cat > /tmp/invalid-missing.yaml <<'EOF'
-          version: 1
-          base_branch: main
-          EOF
+version: 1
+base_branch: main
+EOF
           set +e
           scripts/validate-config.sh /tmp/invalid-missing.yaml
           EXIT=$?
@@ -92,17 +96,17 @@ jobs:
       - name: Reject fan_out with max_agents 0
         run: |
           cat > /tmp/invalid-fanout.yaml <<'EOF'
-          version: 1
-          base_branch: main
-          models:
-            plan: claude-opus-4-8
-            execution: claude-sonnet-4-6
-          commands:
-            test: npm test
-          fan_out:
-            enabled: true
-            max_agents: 0
-          EOF
+version: 1
+base_branch: main
+models:
+  plan: claude-opus-4-8
+  execution: claude-sonnet-4-6
+commands:
+  test: npm test
+fan_out:
+  enabled: true
+  max_agents: 0
+EOF
           set +e
           scripts/validate-config.sh /tmp/invalid-fanout.yaml
           EXIT=$?
@@ -111,16 +115,16 @@ jobs:
       - name: Reject spec.require_approved without spec.tool
         run: |
           cat > /tmp/invalid-spec.yaml <<'EOF'
-          version: 1
-          base_branch: main
-          models:
-            plan: claude-opus-4-8
-            execution: claude-sonnet-4-6
-          commands:
-            test: npm test
-          spec:
-            require_approved: true
-          EOF
+version: 1
+base_branch: main
+models:
+  plan: claude-opus-4-8
+  execution: claude-sonnet-4-6
+commands:
+  test: npm test
+spec:
+  require_approved: true
+EOF
           set +e
           scripts/validate-config.sh /tmp/invalid-spec.yaml
           EXIT=$?
