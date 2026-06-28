@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow pause [run-id] | /devflow resume [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow diff [run-id] | /devflow history | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow gc [--older-than=<N>d] | /devflow update
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow pause [run-id] | /devflow resume [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow diff [run-id] | /devflow history | /devflow config [show] | /devflow specialist add | /devflow specialist validate | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow gc [--older-than=<N>d] | /devflow update
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -1160,7 +1160,52 @@ Then ask: "Anything else to change? (number or 'done')" — loop back to Step 3 
 
 Triggered when `$SUBCMD = specialist`.
 
-If `$SUBARGS` is not `add`, respond: "Usage: /devflow specialist add"
+If `$SUBARGS` starts with `validate`: run the **validate** action below.
+If `$SUBARGS` starts with `add`: run the **add** wizard below.
+Otherwise respond: "Usage: /devflow specialist add | /devflow specialist validate"
+
+### Action: validate — /devflow specialist validate
+
+#### Step 1 — Find all agents
+
+```bash
+AGENTS_DIR=".claude/agents"
+if [ ! -d "$AGENTS_DIR" ]; then
+  echo "No .claude/agents/ directory found."
+  exit 0
+fi
+AGENT_FILES=$(find "$AGENTS_DIR" -name "*.md" 2>/dev/null)
+```
+
+If `$AGENT_FILES` is empty: "No specialist agents found in `.claude/agents/`." and stop.
+
+#### Step 2 — Validate each file
+
+For each file in `$AGENT_FILES`, check:
+1. Starts with `---` (has frontmatter)
+2. Frontmatter contains `name:` field
+3. Frontmatter contains `description:` field
+4. Body after closing `---` has at least one non-empty line
+5. No unknown frontmatter keys (allowed: `name`, `description`, `tools`, `model`)
+
+Collect issues per file.
+
+#### Step 3 — Report
+
+```
+DevFlow: specialist validation
+──────────────────────────────────────────
+  .claude/agents/flutter.md        ✅ valid
+  .claude/agents/typescript.md     ❌ missing description
+  .claude/agents/empty.md          ❌ empty body
+──────────────────────────────────────────
+<N> valid, <M> invalid
+```
+
+If all valid: "All <N> specialists are valid."
+If any invalid: list each file's issues and end with: "Fix the issues above before running /devflow start."
+
+---
 
 ### Interactive wizard — /devflow specialist add
 
@@ -1543,7 +1588,59 @@ else
 fi
 ```
 
-### Step 8 — Print results
+### Step 8 — Runtime checks
+
+Add a section labeled `Runtime checks:` to OUTPUT.
+
+**Stale worktrees:**
+```bash
+WORKTREE_DIR=".devflow/worktrees"
+if [ -d "$WORKTREE_DIR" ]; then
+  STALE=$(find "$WORKTREE_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | while read dir; do
+    git worktree list 2>/dev/null | grep -q "$dir" || basename "$dir"
+  done)
+  if [ -n "$STALE" ]; then
+    OUTPUT="${OUTPUT}\n  ⚠   stale worktrees: ${STALE} (run /devflow clean)"
+  else
+    OUTPUT="${OUTPUT}\n  ✅  no stale worktrees"
+  fi
+fi
+```
+
+**Plugin scripts executable:**
+```bash
+ALL_EXEC=true
+for script in "${CLAUDE_PLUGIN_ROOT}/scripts/"*.sh; do
+  [ -x "$script" ] || ALL_EXEC=false
+done
+if [ "$ALL_EXEC" = true ]; then
+  OUTPUT="${OUTPUT}\n  ✅  plugin scripts executable"
+else
+  OUTPUT="${OUTPUT}\n  ❌  some plugin scripts are not executable (run: chmod +x \${CLAUDE_PLUGIN_ROOT}/scripts/*.sh)"
+  ISSUES=$((ISSUES + 1))
+fi
+```
+
+**`gh` CLI authenticated:**
+```bash
+if gh auth status &>/dev/null; then
+  OUTPUT="${OUTPUT}\n  ✅  gh CLI authenticated"
+else
+  OUTPUT="${OUTPUT}\n  ❌  gh CLI not authenticated (run: gh auth login)"
+  ISSUES=$((ISSUES + 1))
+fi
+```
+
+**`yq` available:**
+```bash
+if command -v yq &>/dev/null; then
+  OUTPUT="${OUTPUT}\n  ✅  yq installed"
+else
+  OUTPUT="${OUTPUT}\n  ⚠   yq not found — using grep fallback (install yq for better compatibility)"
+fi
+```
+
+### Step 9 — Print results
 
 Print the header, all checklist lines, footer, and summary:
 
@@ -1972,7 +2069,7 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow history [--status=<success|failed|running>] [--since=<7d|24h>] [--task=<keyword>]
   /devflow gc [--older-than=<N>d]
   /devflow config
-  /devflow specialist add
+  /devflow specialist add | /devflow specialist validate
   /devflow doctor
   /devflow clean
   /devflow update
