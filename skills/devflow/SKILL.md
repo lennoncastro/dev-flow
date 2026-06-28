@@ -163,6 +163,7 @@ Handle `$ON_PARTIAL`:
 - `isolate` → continue with passing scopes, mark failures in telemetry
 - `retry` → re-run failed agents up to `retry_limit` before abort
 
+**Run now before proceeding:**
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=execute" "status=done"
 ```
@@ -188,6 +189,7 @@ If `ESTIMATED_TOKENS > MAX_TOKENS`:
 
 If `$CMD_TEST` is set, run it inside `$WORKTREE`. If it fails and `$GATE_TESTS=true`, log and stop.
 
+**Run now before proceeding:**
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=test" "status=passed"
 ```
@@ -196,6 +198,7 @@ If `$CMD_TEST` is set, run it inside `$WORKTREE`. If it fails and `$GATE_TESTS=t
 
 If `$CMD_LINT` is set, run it inside `$WORKTREE`. If it fails and `$GATE_LINT=true`, log and stop.
 
+**Run now before proceeding:**
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=lint" "status=passed"
 ```
@@ -208,6 +211,7 @@ If `$CMD_BUILD` is set, run it inside `$WORKTREE`.
 
 Self-review all changes in `$WORKTREE`: correctness vs plan, no hardcoded values, no regressions, adequate test coverage. If issues found, return to Step 8 for targeted re-execution.
 
+**Run now before proceeding:**
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=review" "status=passed"
 ```
@@ -315,6 +319,7 @@ If `$CMD_DEPLOY` is set and `$DEPLOY_BEFORE_PR=false`, run deploy after PR.
 
 ### Step 16 — Cleanup
 
+**Run now:**
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/worktree-cleanup.sh" "$TASK_SLUG"
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" stop "$RUN_ID" "status=success"
