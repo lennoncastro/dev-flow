@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -296,6 +296,81 @@ If `$CMD_DEPLOY` is set and `$DEPLOY_BEFORE_PR=false`, run deploy after PR.
 ```
 
 Report the PR URL and a summary of phases completed.
+
+---
+
+## Subcommand: plan
+
+Triggered when `$SUBCMD = plan`. Task description is `$SUBARGS`.
+
+Preview what DevFlow would do for a task — runs planning and specialist discovery only, no worktree created, no execution.
+
+### Step 1 — Validate config
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/validate-config.sh" "${PWD}/.devflow.yaml"
+```
+
+If it exits non-zero, stop immediately and show the error.
+
+### Step 2 — Read config
+
+Same as `start` Step 2. Read all fields from `.devflow.yaml`.
+
+### Step 3 — Generate task slug and run ID
+
+```bash
+TASK_SLUG=$(echo "$SUBARGS" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/-*$//' | cut -c1-40)
+RUN_ID="${TASK_SLUG}-$(date +%s)"
+```
+
+### Step 4 — Plan
+
+Using model `$MODEL_PLAN`, produce a structured plan for the task. Identify:
+- Which files/directories will be touched
+- Scopes (for specialist discovery)
+- Sub-tasks that could be parallelized
+
+Record touched paths in `$TOUCHED_PATHS` (space-separated).
+
+### Step 5 — Discover specialists
+
+```bash
+SPECIALISTS=$("${CLAUDE_PLUGIN_ROOT}/scripts/discover-specialists.sh" $TOUCHED_PATHS 2>/dev/null || true)
+N_SPECIALISTS=$(echo "$SPECIALISTS" | grep -c '|' 2>/dev/null || echo 0)
+```
+
+### Step 6 — Log and display
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=plan_only" "status=done"
+```
+
+Display the preview:
+
+```
+DevFlow plan — <SUBARGS>
+──────────────────────────────────────────
+  Run ID:      <RUN_ID> (plan only)
+  Base branch: <BASE_BRANCH>
+  Model:       <MODEL_PLAN>
+
+  Plan:
+  <structured plan from Step 4>
+
+  Specialists:
+  <scope → agent file per specialist, or "none — fallback: <FALLBACK_MODE>">
+
+  Would execute:
+    fan-out:  <N_SPECIALISTS> agents (max <MAX_AGENTS>)
+    test:     <CMD_TEST>
+    lint:     <CMD_LINT or "(skipped)">
+    build:    <CMD_BUILD or "(skipped)">
+    deploy:   <CMD_DEPLOY or "(skipped)">
+    auto_pr:  <AUTO_PR>
+──────────────────────────────────────────
+To run for real: /devflow start <SUBARGS>
+```
 
 ---
 
@@ -1120,12 +1195,13 @@ Then:
 
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, or `doctor`, respond:
+If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, or `doctor`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow init
   /devflow start [--auto-pr] [--dry-run] <task description>
+  /devflow plan <task description>
   /devflow retry [run-id]
   /devflow abort [run-id]
   /devflow status
