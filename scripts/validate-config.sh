@@ -11,22 +11,17 @@ fail() {
 [ -f "$CONFIG" ] || fail "'.devflow.yaml' not found at '${CONFIG}'"
 
 # --- Read helpers ---
-if command -v yq &>/dev/null; then
-  yq_get() { yq e "${1} // \"\"" "$CONFIG" 2>/dev/null; }
-else
-  # grep-based fallback: handles simple flat and one-level nested keys
-  yq_get() {
-    local key="$1"
-    # Convert dotted key to nested grep pattern
-    local top="${key%%.*}"
-    local rest="${key#*.}"
-    if [ "$top" = "$rest" ]; then
-      grep -E "^${top}:" "$CONFIG" | awk -F': ' '{print $2}' | tr -d '"' | tr -d "'" | xargs || true
-    else
-      awk "/^${top}:/{found=1} found && /^  ${rest}:/{print \$2; exit}" "$CONFIG" | tr -d '"' | tr -d "'" | xargs || true
-    fi
-  }
-fi
+# grep-based: no external dependencies (avoids Python yq vs Go yq conflicts)
+yq_get() {
+  local key="$1"
+  local top="${key%%.*}"
+  local rest="${key#*.}"
+  if [ "$top" = "$rest" ]; then
+    grep -E "^${top}:" "$CONFIG" | awk -F': ' '{print $2}' | tr -d '"' | tr -d "'" | xargs || true
+  else
+    awk "/^${top}:/{found=1} found && /^  ${rest}:/{print \$2; exit}" "$CONFIG" | tr -d '"' | tr -d "'" | xargs || true
+  fi
+}
 
 # --- Required fields ---
 VERSION=$(yq_get 'version')
