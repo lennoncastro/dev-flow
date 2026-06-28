@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] <task> | /devflow status
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] <task> | /devflow status | /devflow config [get <key> | set <key> <value>]
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -462,13 +462,122 @@ Omit the Tip line for generic stack.
 
 ---
 
+## Subcommand: config
+
+Triggered when `$SUBCMD = config`.
+
+Parse the sub-subcommand and arguments:
+
+```bash
+CONFIG_CMD=$(echo "$SUBARGS" | awk '{print $1}')   # get | set | (empty)
+CONFIG_KEY=$(echo "$SUBARGS" | awk '{print $2}')
+CONFIG_VAL=$(echo "$SUBARGS" | awk '{print $3}')
+```
+
+If `.devflow.yaml` does not exist, respond: "No .devflow.yaml found. Run /devflow init first."
+
+---
+
+### No args — show config summary
+
+When `$CONFIG_CMD` is empty, read and display all fields:
+
+```bash
+yq_read() { yq e "${1} // \"(not set)\"" .devflow.yaml 2>/dev/null || grep -E "^${2}:" .devflow.yaml | awk '{print $2}' || echo "(not set)"; }
+```
+
+Display:
+
+```
+DevFlow config (.devflow.yaml)
+
+  version:        <version>
+  base_branch:    <base_branch>
+
+  models:
+    plan:         <models.plan>
+    execution:    <models.execution>
+
+  commands:
+    test:         <commands.test>
+    lint:         <commands.lint or "(not set)">
+    build:        <commands.build or "(not set)">
+    deploy:       <commands.deploy or "(not set)">
+
+  fan_out:
+    enabled:      <fan_out.enabled or "false">
+    max_agents:   <fan_out.max_agents or "1">
+
+  gates:
+    auto_pr:             <gates.auto_pr or "false">
+    deploy_before_pr:    <gates.deploy_before_pr or "false">
+    require_tests_pass:  <gates.require_tests_pass or "true">
+    require_lint_pass:   <gates.require_lint_pass or "true">
+
+  fallback:
+    mode:         <fallback.mode or "generic">
+
+  telemetry:
+    enabled:      <telemetry.enabled or "true">
+    path:         <telemetry.path or ".devflow/runs/">
+```
+
+---
+
+### get — read a single key
+
+When `$CONFIG_CMD = get`:
+
+```bash
+VALUE=$(yq e ".$CONFIG_KEY" .devflow.yaml 2>/dev/null)
+```
+
+If value is empty or null, respond: "Key '$CONFIG_KEY' not found in .devflow.yaml"
+Otherwise print the value.
+
+---
+
+### set — update a key
+
+When `$CONFIG_CMD = set`:
+
+If `yq` is not available: "yq is required to set config values. Install with: brew install yq  or  snap install yq"
+
+Otherwise:
+
+For boolean values (`true`/`false`), write without quotes:
+```bash
+yq e -i ".$CONFIG_KEY = $CONFIG_VAL" .devflow.yaml
+```
+
+For string values:
+```bash
+yq e -i ".$CONFIG_KEY = \"$CONFIG_VAL\"" .devflow.yaml
+```
+
+Detect booleans: if `$CONFIG_VAL` is exactly `true` or `false`, treat as boolean.
+
+After writing, confirm: "Set $CONFIG_KEY = $CONFIG_VAL in .devflow.yaml"
+
+Supported keys (accept any dotted key, these are documented):
+- `base_branch`, `models.plan`, `models.execution`
+- `commands.test`, `commands.lint`, `commands.build`, `commands.deploy`
+- `fan_out.enabled`, `fan_out.max_agents`
+- `gates.auto_pr`, `gates.deploy_before_pr`, `gates.require_tests_pass`, `gates.require_lint_pass`
+- `fallback.mode`, `telemetry.enabled`, `telemetry.path`
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, or `status`, respond:
+If `$SUBCMD` is not `init`, `start`, `status`, or `config`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow init
-  /devflow start <task description>
+  /devflow start [--auto-pr] <task description>
   /devflow status
+  /devflow config
+  /devflow config get <key>
+  /devflow config set <key> <value>
 ```
