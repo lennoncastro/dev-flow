@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -504,9 +504,16 @@ Continue the start workflow normally from the resumed phase through cleanup.
 
 ## Subcommand: status
 
-Triggered when `$SUBCMD = status`.
+Triggered when `$SUBCMD = status`. Accepts optional `--watch` flag.
 
-Show the status of all DevFlow runs in this repository.
+Detect watch mode:
+
+```bash
+WATCH=false
+echo "${SUBARGS:-}" | grep -q -- '--watch' && WATCH=true
+```
+
+Locate telemetry dir:
 
 ```bash
 TELEMETRY_DIR=".devflow/runs"
@@ -520,14 +527,42 @@ if [ ! -d "$TELEMETRY_DIR" ] || [ -z "$(ls -A "$TELEMETRY_DIR" 2>/dev/null)" ]; 
   echo "No DevFlow runs found in ${TELEMETRY_DIR}."
   exit 0
 fi
+```
 
-for file in "$TELEMETRY_DIR"/*.jsonl; do
-  run_id=$(basename "$file" .jsonl)
-  last_event=$(tail -1 "$file")
-  event=$(echo "$last_event" | jq -r '.event // "unknown"')
-  ts=$(echo "$last_event" | jq -r '.ts // "unknown"')
-  status=$(echo "$last_event" | jq -r '.status // "-"')
-  echo "Run: ${run_id} | Last event: ${event} | Status: ${status} | At: ${ts}"
+Define a print function and call it once:
+
+```bash
+print_status() {
+  for file in "$TELEMETRY_DIR"/*.jsonl; do
+    run_id=$(basename "$file" .jsonl)
+    last_event=$(tail -1 "$file")
+    event=$(echo "$last_event" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event","unknown"))' 2>/dev/null || echo "unknown")
+    ts=$(echo "$last_event" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ts","unknown"))' 2>/dev/null || echo "unknown")
+    status=$(echo "$last_event" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status","-"))' 2>/dev/null || echo "-")
+    echo "Run: ${run_id} | Last event: ${event} | Status: ${status} | At: ${ts}"
+  done
+}
+
+print_status
+```
+
+If `$WATCH=true`, continue watching:
+
+```
+(watching — refreshing every 10s, Ctrl+C to stop)
+```
+
+```bash
+while true; do
+  sleep 10
+  ALL_DONE=true
+  for file in "$TELEMETRY_DIR"/*.jsonl; do
+    last=$(tail -1 "$file" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event",""))' 2>/dev/null || true)
+    [ "$last" != "stop" ] && [ "$last" != "fail" ] && ALL_DONE=false
+  done
+  echo "──────────────────────────────────────"
+  print_status
+  [ "$ALL_DONE" = true ] && echo "(all runs finished)" && break
 done
 ```
 
@@ -555,24 +590,42 @@ If no file found: "No runs found in `$TELEMETRY_DIR`."
 
 Read all lines from the JSONL. For each event, extract `ts`, `event`, `phase`, `status`, and any extra fields.
 
+After reading all events, determine which phases from the expected sequence were logged:
+
+```
+EXPECTED_PHASES="plan discover execute test lint review pr"
+```
+
+For each phase in `$EXPECTED_PHASES`:
+- If it appears in the JSONL with a `phase` event → show it normally with ✅ or ❌
+- If it does NOT appear but comes after the last logged phase AND before `stop`/`fail` → show it as `⚠ not logged`
+- If it comes before the last logged phase and is missing → also show it as `⚠ not logged`
+
+Skip the `⚠ not logged` inference only if the run has a `stop` event AND all expected phases are present.
+
 Display as a timeline:
 
 ```
 Run: <run-id>
 ─────────────────────────────────────────────────────────────
   <time>  start      task="<task>"
-  <time>  phase      plan          ✅  <duration>
-  <time>  phase      discover      ✅  <duration>  specialists=<n>
-  <time>  phase      execute       ✅  <duration>
-  <time>  phase      test          ✅  <duration>
-  <time>  phase      lint          ✅  <duration>
-  <time>  phase      review        ✅  <duration>
-  <time>  phase      pr            ✅  <duration>  url=<pr-url>
-  <time>  stop       status=success  total=<total-duration>
+  <time>  phase      plan       ✅  <duration>
+  <time>  phase      discover   ✅  <duration>  specialists=<n>
+  ??:??   phase      execute    ⚠  not logged
+  ??:??   phase      test       ⚠  not logged
+  ??:??   phase      lint       ⚠  not logged
+  ??:??   phase      review     ⚠  not logged
+  ??:??   phase      pr         ⚠  not logged
+  (no stop event — run may still be in progress or telemetry incomplete)
 ─────────────────────────────────────────────────────────────
 ```
 
 For `fail` events use ❌ instead of ✅. Calculate duration between consecutive timestamps. Show total elapsed from start to stop/fail.
+
+If any `⚠ not logged` phases exist, append after the separator:
+```
+⚠  Some phases were not logged. This may indicate the motor skipped telemetry calls.
+```
 
 If `$MULTIPLE > 1` and no run-id was specified, append: "(showing latest — use /devflow logs <run-id> to see others)"
 
@@ -1345,9 +1398,39 @@ Updated. Restart Claude Code for changes to take effect.
 
 ---
 
+## Subcommand: open
+
+Triggered when `$SUBCMD = open`. Optional run ID in `$SUBARGS`.
+
+Opens the GitHub PR associated with a run in the browser.
+
+### Step 1 — Find the run
+
+```bash
+TELEMETRY_DIR=$(grep -A1 'path:' .devflow.yaml 2>/dev/null | tail -1 | awk '{print $2}' || echo ".devflow/runs/")
+if [ -n "$SUBARGS" ] && [ "$SUBARGS" != "$SUBCMD" ]; then
+  RUN_FILE="${TELEMETRY_DIR}/${SUBARGS}.jsonl"
+else
+  RUN_FILE=$(ls -t "${TELEMETRY_DIR}"*.jsonl 2>/dev/null | head -1)
+fi
+```
+
+If not found: "No run found. Use /devflow status to list runs." and stop.
+
+### Step 2 — Open PR in browser
+
+```bash
+RUN_ID=$(basename "$RUN_FILE" .jsonl)
+TASK_SLUG=$(echo "$RUN_ID" | sed 's/-[0-9]*$//')
+BRANCH="devflow/${TASK_SLUG}"
+gh pr view "$BRANCH" --web 2>/dev/null || echo "No PR found for branch ${BRANCH}."
+```
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, or `update`, respond:
+If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, or `open`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
@@ -1357,8 +1440,9 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow retry [run-id]
   /devflow abort [run-id]
   /devflow rollback [run-id]
-  /devflow status
+  /devflow status [--watch]
   /devflow logs [run-id]
+  /devflow open [run-id]
   /devflow config
   /devflow specialist add
   /devflow doctor
