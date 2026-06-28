@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow rollback [run-id]
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id]
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -57,6 +57,7 @@ GATE_TESTS=$(yq e '.gates.require_tests_pass // "true"' .devflow.yaml 2>/dev/nul
 GATE_LINT=$(yq e '.gates.require_lint_pass // "true"' .devflow.yaml 2>/dev/null || echo "true")
 DEPLOY_BEFORE_PR=$(yq e '.gates.deploy_before_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
 AUTO_PR=$(yq e '.gates.auto_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
+DRAFT_PR=$(yq e '.gates.draft_pr // "true"' .devflow.yaml 2>/dev/null || echo "true")
 FALLBACK_MODE=$(yq e '.fallback.mode // "generic"' .devflow.yaml 2>/dev/null || echo "generic")
 MAX_TOKENS=$(yq e '.limits.max_tokens_per_run // "0"' .devflow.yaml 2>/dev/null || echo "0")
 ON_LIMIT=$(yq e '.limits.on_limit // "confirm"' .devflow.yaml 2>/dev/null || echo "confirm")
@@ -224,6 +225,15 @@ git commit -m "feat: $SUBARGS"
 git push origin "devflow/$TASK_SLUG"
 ```
 
+Read PR template if present:
+
+```bash
+PR_TEMPLATE=""
+if [ -f ".devflow/pr-template.md" ]; then
+  PR_TEMPLATE=$(cat ".devflow/pr-template.md")
+fi
+```
+
 Build the PR body from the telemetry JSONL:
 
 ```bash
@@ -247,7 +257,14 @@ if [ -f "$TELEMETRY_FILE" ]; then
   done < "$TELEMETRY_FILE"
 fi
 
-PR_BODY="## Changes
+TEMPLATE_SECTION=""
+[ -n "$PR_TEMPLATE" ] && TEMPLATE_SECTION="${PR_TEMPLATE}
+
+---
+
+"
+
+PR_BODY="${TEMPLATE_SECTION}## Changes
 ${SUBARGS}
 
 ## DevFlow run \`${RUN_ID}\`
@@ -261,10 +278,17 @@ ${PHASE_ROWS}
 🤖 Automated by [DevFlow](https://github.com/lennoncastro/dev-flow)"
 ```
 
+Set draft flag:
+
+```bash
+DRAFT_FLAG=""
+[ "$DRAFT_PR" = "true" ] && DRAFT_FLAG="--draft"
+```
+
 If `$AUTO_PR=true`, open the PR immediately without asking:
 
 ```bash
-gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH"
+gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH" $DRAFT_FLAG
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=pr" "status=opened"
 ```
 
@@ -273,6 +297,7 @@ If `$AUTO_PR=false`, show a preview and ask the user to confirm before running:
 ```
 Ready to open PR:
   Title: feat: <SUBARGS>
+  Draft: <yes if DRAFT_PR=true, no otherwise>
   Body preview:
     ## Changes
     <SUBARGS>
@@ -282,7 +307,7 @@ Ready to open PR:
 Open the PR? (y/N)
 ```
 
-Only run `gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH"` after the user confirms.
+Only run `gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH" $DRAFT_FLAG` after the user confirms.
 
 ### Step 15 — Post-PR deploy (optional)
 
@@ -296,6 +321,81 @@ If `$CMD_DEPLOY` is set and `$DEPLOY_BEFORE_PR=false`, run deploy after PR.
 ```
 
 Report the PR URL and a summary of phases completed.
+
+---
+
+## Subcommand: plan
+
+Triggered when `$SUBCMD = plan`. Task description is `$SUBARGS`.
+
+Preview what DevFlow would do for a task — runs planning and specialist discovery only, no worktree created, no execution.
+
+### Step 1 — Validate config
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/validate-config.sh" "${PWD}/.devflow.yaml"
+```
+
+If it exits non-zero, stop immediately and show the error.
+
+### Step 2 — Read config
+
+Same as `start` Step 2. Read all fields from `.devflow.yaml`.
+
+### Step 3 — Generate task slug and run ID
+
+```bash
+TASK_SLUG=$(echo "$SUBARGS" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/-*$//' | cut -c1-40)
+RUN_ID="${TASK_SLUG}-$(date +%s)"
+```
+
+### Step 4 — Plan
+
+Using model `$MODEL_PLAN`, produce a structured plan for the task. Identify:
+- Which files/directories will be touched
+- Scopes (for specialist discovery)
+- Sub-tasks that could be parallelized
+
+Record touched paths in `$TOUCHED_PATHS` (space-separated).
+
+### Step 5 — Discover specialists
+
+```bash
+SPECIALISTS=$("${CLAUDE_PLUGIN_ROOT}/scripts/discover-specialists.sh" $TOUCHED_PATHS 2>/dev/null || true)
+N_SPECIALISTS=$(echo "$SPECIALISTS" | grep -c '|' 2>/dev/null || echo 0)
+```
+
+### Step 6 — Log and display
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=plan_only" "status=done"
+```
+
+Display the preview:
+
+```
+DevFlow plan — <SUBARGS>
+──────────────────────────────────────────
+  Run ID:      <RUN_ID> (plan only)
+  Base branch: <BASE_BRANCH>
+  Model:       <MODEL_PLAN>
+
+  Plan:
+  <structured plan from Step 4>
+
+  Specialists:
+  <scope → agent file per specialist, or "none — fallback: <FALLBACK_MODE>">
+
+  Would execute:
+    fan-out:  <N_SPECIALISTS> agents (max <MAX_AGENTS>)
+    test:     <CMD_TEST>
+    lint:     <CMD_LINT or "(skipped)">
+    build:    <CMD_BUILD or "(skipped)">
+    deploy:   <CMD_DEPLOY or "(skipped)">
+    auto_pr:  <AUTO_PR>
+──────────────────────────────────────────
+To run for real: /devflow start <SUBARGS>
+```
 
 ---
 
@@ -537,6 +637,8 @@ commands:
   build: flutter build apk
 fallback:
   mode: generic
+gates:
+  draft_pr: true
 telemetry:
   enabled: true
   path: .devflow/runs/
@@ -735,6 +837,7 @@ Done.
 
 Next: /devflow start <task description>
 Tip: your specialist at .claude/agents/<stack>.md can invoke the `<skill>` skill for deeper stack knowledge.
+Tip: create `.devflow/pr-template.md` to customize PR descriptions.
 ```
 
 Omit the Tip line for generic stack. Omit the `settings.json` line if `$PLUGIN_SCRIPTS` was empty.
@@ -1218,14 +1321,116 @@ Run <RUN_ID> rolled back.
 
 ---
 
+## Subcommand: clean
+
+Triggered when `$SUBCMD = clean`.
+
+Remove orphaned worktrees and old telemetry files.
+
+### Step 1 — Locate dirs
+
+```bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE_DIR="${REPO_ROOT}/.devflow/worktrees"
+TELEMETRY_DIR=".devflow/runs/"
+if [ -f ".devflow.yaml" ]; then
+  CONFIGURED=$(grep -A1 'path:' .devflow.yaml 2>/dev/null | tail -1 | awk '{print $2}' || true)
+  [ -n "$CONFIGURED" ] && TELEMETRY_DIR="$CONFIGURED"
+fi
+RETAIN_DAYS=$(grep 'retain_days:' .devflow.yaml 2>/dev/null | awk '{print $2}' || echo 30)
+```
+
+### Step 2 — Find orphaned worktrees
+
+For each directory in `$WORKTREE_DIR`:
+
+```bash
+ORPHANED_WORKTREES=""
+if [ -d "$WORKTREE_DIR" ]; then
+  for wt in "$WORKTREE_DIR"/*/; do
+    [ -d "$wt" ] || continue
+    slug=$(basename "$wt")
+    jsonl=$(ls "${TELEMETRY_DIR}${slug}"-*.jsonl 2>/dev/null | tail -1)
+    if [ -z "$jsonl" ]; then
+      ORPHANED_WORKTREES="${ORPHANED_WORKTREES} ${slug}"
+    else
+      last_event=$(tail -1 "$jsonl" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event",""))' 2>/dev/null || true)
+      if [ "$last_event" = "stop" ] || [ "$last_event" = "fail" ]; then
+        ORPHANED_WORKTREES="${ORPHANED_WORKTREES} ${slug}"
+      fi
+    fi
+  done
+fi
+```
+
+### Step 3 — Find old telemetry
+
+```bash
+OLD_TELEMETRY=""
+if [ -d "$TELEMETRY_DIR" ]; then
+  while IFS= read -r f; do
+    OLD_TELEMETRY="${OLD_TELEMETRY} ${f}"
+  done < <(find "$TELEMETRY_DIR" -name "*.jsonl" -mtime "+${RETAIN_DAYS}" 2>/dev/null)
+fi
+```
+
+### Step 4 — Show summary and confirm
+
+If both `$ORPHANED_WORKTREES` and `$OLD_TELEMETRY` are empty: "Nothing to clean." and stop.
+
+Otherwise display:
+
+```
+DevFlow clean
+──────────────────────────────────────────
+  Orphaned worktrees (<N>):
+    .devflow/worktrees/<slug>
+    ...
+
+  Old telemetry (><RETAIN_DAYS> days) (<N>):
+    .devflow/runs/<file>.jsonl
+    ...
+
+Total: <N> worktrees, <N> telemetry files
+──────────────────────────────────────────
+Remove all? (y/N)
+```
+
+Wait for user confirmation. If not `y`/`yes`: "Cancelled." and stop.
+
+### Step 5 — Remove
+
+For each slug in `$ORPHANED_WORKTREES`:
+
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/worktree-cleanup.sh" "<slug>"
+```
+
+For each file in `$OLD_TELEMETRY`:
+
+```bash
+rm -f "<file>"
+```
+
+### Step 6 — Report
+
+```
+Cleaned:
+  <N> worktrees removed
+  <N> telemetry files deleted
+```
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, or `rollback`, respond:
+If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, or `rollback`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow init
   /devflow start [--auto-pr] [--dry-run] <task description>
+  /devflow plan <task description>
   /devflow retry [run-id]
   /devflow abort [run-id]
   /devflow rollback [run-id]
@@ -1234,4 +1439,6 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow config
   /devflow specialist add
   /devflow doctor
+  /devflow clean
+  /devflow update
 ```
