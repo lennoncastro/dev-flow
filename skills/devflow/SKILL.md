@@ -63,6 +63,7 @@ FALLBACK_MODE=$(yq e '.fallback.mode // "generic"' .devflow.yaml 2>/dev/null || 
 MAX_TOKENS=$(yq e '.limits.max_tokens_per_run // "0"' .devflow.yaml 2>/dev/null || echo "0")
 ON_LIMIT=$(yq e '.limits.on_limit // "confirm"' .devflow.yaml 2>/dev/null || echo "confirm")
 RETRY_LIMIT=$(yq e '.limits.retry_limit // "0"' .devflow.yaml 2>/dev/null || echo "0")
+CI_TIMEOUT=$(yq e '.gates.ci_timeout // "300"' .devflow.yaml 2>/dev/null || echo "300")
 ```
 
 If `$SUBARGS` contains `--auto-pr`, set `AUTO_PR=true` and strip the flag from the task description:
@@ -391,6 +392,62 @@ Open the PR? (y/N)
 ```
 
 Only run `gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH" $DRAFT_FLAG` after the user confirms.
+
+### Step 14b — CI polling
+
+**Run now:**
+```bash
+PR_URL=$(gh pr view "devflow/${TASK_SLUG}" --json url -q '.url' 2>/dev/null || true)
+```
+
+If `$PR_URL` is empty, skip to Step 15.
+
+Otherwise, poll CI with timeout `$CI_TIMEOUT`:
+
+```bash
+CI_POLL_INTERVAL=30
+CI_ELAPSED=0
+CI_RESULT=""
+
+echo "DevFlow: waiting for CI checks on ${PR_URL} (timeout: ${CI_TIMEOUT}s)..."
+
+while [ "$CI_ELAPSED" -lt "$CI_TIMEOUT" ]; do
+  CI_STATUS=$(gh pr checks "devflow/${TASK_SLUG}" 2>/dev/null | awk '{print $2}' | sort | uniq | tr '\n' ' ' || echo "unknown")
+
+  if echo "$CI_STATUS" | grep -q "fail"; then
+    CI_RESULT="failed"
+    break
+  elif ! echo "$CI_STATUS" | grep -qE "pending|queued|in_progress"; then
+    CI_RESULT="passed"
+    break
+  fi
+
+  echo "  CI: ${CI_STATUS}(${CI_ELAPSED}s elapsed)"
+  sleep "$CI_POLL_INTERVAL"
+  CI_ELAPSED=$((CI_ELAPSED + CI_POLL_INTERVAL))
+done
+
+[ -z "$CI_RESULT" ] && CI_RESULT="timeout"
+```
+
+**Run now:**
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=ci" "status=${CI_RESULT}"
+```
+
+Send notification:
+```bash
+if command -v notify-send &>/dev/null; then
+  notify-send "DevFlow" "CI ${CI_RESULT} for ${RUN_ID}"
+elif command -v osascript &>/dev/null; then
+  osascript -e "display notification \"CI ${CI_RESULT}\" with title \"DevFlow\""
+fi
+printf '\a'
+```
+
+- `passed` → continue to Step 15
+- `failed` → show "CI checks failed. Review: `$PR_URL`" and stop
+- `timeout` → show "CI polling timed out after ${CI_TIMEOUT}s. Check manually: `$PR_URL`" and continue
 
 ### Step 15 — Post-PR deploy (optional)
 
