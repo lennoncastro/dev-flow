@@ -224,23 +224,65 @@ git commit -m "feat: $SUBARGS"
 git push origin "devflow/$TASK_SLUG"
 ```
 
+Build the PR body from the telemetry JSONL:
+
+```bash
+TELEMETRY_FILE="${TELEMETRY_DIR}/${RUN_ID}.jsonl"
+PHASE_ROWS=""
+SPECIALISTS_FOUND=""
+if [ -f "$TELEMETRY_FILE" ]; then
+  while IFS= read -r line; do
+    event=$(echo "$line" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("event",""))' 2>/dev/null)
+    if [ "$event" = "phase" ]; then
+      phase=$(echo "$line" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("phase",""))' 2>/dev/null)
+      status_val=$(echo "$line" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status",""))' 2>/dev/null)
+      icon=$([ "$status_val" = "done" ] || [ "$status_val" = "passed" ] && echo "✅" || echo "❌")
+      extra=""
+      if [ "$phase" = "discover" ]; then
+        SPECIALISTS_FOUND=$(echo "$line" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("specialists_found","—"))' 2>/dev/null)
+        extra=" — specialists: ${SPECIALISTS_FOUND}"
+      fi
+      PHASE_ROWS="${PHASE_ROWS}| ${phase} | ${icon} | —${extra} |\n"
+    fi
+  done < "$TELEMETRY_FILE"
+fi
+
+PR_BODY="## Changes
+${SUBARGS}
+
+## DevFlow run \`${RUN_ID}\`
+| Phase | Status | Duration |
+|-------|--------|----------|
+${PHASE_ROWS}
+**Specialists:** ${SPECIALISTS_FOUND:-—}
+**Base branch:** ${BASE_BRANCH}
+**Worktree:** devflow/${TASK_SLUG}
+
+🤖 Automated by [DevFlow](https://github.com/lennoncastro/dev-flow)"
+```
+
 If `$AUTO_PR=true`, open the PR immediately without asking:
 
 ```bash
-gh pr create --title "feat: $SUBARGS" --body "Automated by DevFlow run \`$RUN_ID\`." --base "$BASE_BRANCH"
+gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH"
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=pr" "status=opened"
 ```
 
-If `$AUTO_PR=false`, show the command and ask the user to confirm before running:
+If `$AUTO_PR=false`, show a preview and ask the user to confirm before running:
 
 ```
-Ready to open PR. Run this command to proceed:
-  gh pr create --title "feat: $SUBARGS" --body "Automated by DevFlow run `$RUN_ID`." --base "$BASE_BRANCH"
+Ready to open PR:
+  Title: feat: <SUBARGS>
+  Body preview:
+    ## Changes
+    <SUBARGS>
+    ## DevFlow run `<RUN_ID>`
+    <phase table>
 
 Open the PR? (y/N)
 ```
 
-Only run `gh pr create` after the user confirms.
+Only run `gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH"` after the user confirms.
 
 ### Step 15 — Post-PR deploy (optional)
 
