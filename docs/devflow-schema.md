@@ -86,6 +86,11 @@ gates:
   auto_pr: false              # bool. Default: false.
                               #   false -> mostra comando, pede confirmação antes de abrir PR
                               #   true  -> abre PR automaticamente sem perguntar
+  draft_pr: true              # bool. Default: true. Abre PR como draft.
+  require_diff_review: true   # bool. Default: true. Exibe git diff e pede confirmação
+                              # antes de commitar. false = pula a revisão.
+  ci_timeout: 300             # int. Default: 300 (segundos). Tempo máximo aguardando
+                              # os CI checks após abrir o PR. 0 = não aguarda.
 
 # --- Spec (opcional) ---
 spec:
@@ -109,6 +114,9 @@ limits:
   max_tokens_per_run: 0       # int >= 0. Default: 0 (sem limite).
                               # > 0 aborta ou pede confirmação ao estourar.
   on_limit: confirm           # enum. Default: confirm. (confirm | abort)
+  retry_limit: 0              # int >= 0. Default: 0. Número de retentativas
+                              # automáticas em falha de test ou lint gate.
+                              # Só usado se fan_out.on_partial_failure: retry.
 
 # --- Telemetria (opcional) ---
 telemetry:
@@ -139,6 +147,10 @@ telemetry:
 | `gates.require_tests_pass` | bool | não | `true` | Bloqueia PR se teste falha. |
 | `gates.require_lint_pass` | bool | não | `true` | Ignorado se sem lint. |
 | `gates.auto_pr` | bool | não | `false` | `false` = pede confirmação; `true` = abre PR automaticamente. |
+| `gates.draft_pr` | bool | não | `true` | Abre PR como draft. |
+| `gates.require_diff_review` | bool | não | `true` | Exibe diff e pede confirmação antes de commitar. |
+| `gates.ci_timeout` | int | não | `300` | Segundos aguardando CI checks após PR. `0` = não aguarda. |
+| `limits.retry_limit` | int ≥ 0 | não | `0` | Retentativas automáticas em falha de test/lint. |
 | `spec.tool` | string | não | — | Ferramenta de spec externa. Ausente = sem etapa de spec. |
 | `spec.require_approved` | bool | não | `true`* | *Quando `tool` presente. Exige spec aprovada antes das tasks. |
 | `fallback.mode` | enum | não | `generic` | `generic` / `refuse`. |
