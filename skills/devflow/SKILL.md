@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow start <task> | /devflow status
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start <task> | /devflow status
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -198,12 +198,251 @@ done
 
 ---
 
+## Subcommand: init
+
+Triggered when `$SUBCMD = init` (or when `$ARGUMENTS` is empty).
+
+Set up DevFlow in the current project: detect stack, generate `.devflow.yaml` and a specialist agent.
+
+### Step 1 — Check for existing config
+
+```bash
+if [ -f ".devflow.yaml" ]; then
+  echo "Warning: .devflow.yaml already exists. Overwrite? (y/N)"
+fi
+```
+
+If the file exists, ask the user before proceeding. If they say no, stop.
+
+### Step 2 — Detect base branch
+
+```bash
+BASE_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')
+BASE_BRANCH="${BASE_BRANCH:-main}"
+```
+
+### Step 3 — Detect stack
+
+Check for these files in the current directory, in order:
+
+```bash
+if [ -f "pubspec.yaml" ]; then
+  STACK="flutter"
+elif [ -f "package.json" ] && [ -f "tsconfig.json" ]; then
+  STACK="typescript"
+elif [ -f "package.json" ]; then
+  STACK="node"
+elif [ -f "pyproject.toml" ] || [ -f "requirements.txt" ]; then
+  STACK="python"
+elif [ -f "go.mod" ]; then
+  STACK="go"
+elif [ -f "Cargo.toml" ]; then
+  STACK="rust"
+elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+  STACK="android"
+else
+  STACK="generic"
+fi
+```
+
+### Step 4 — Determine commands per stack
+
+Based on `$STACK`:
+
+**flutter:** `CMD_TEST="flutter test"`, `CMD_LINT="flutter analyze"`, `CMD_BUILD="flutter build apk"`
+
+**typescript / node:** Check `package.json` scripts block. If `test` key exists, `CMD_TEST="npm run test"`. If `lint` key exists, `CMD_LINT="npm run lint"`. If `build` key exists, `CMD_BUILD="npm run build"`.
+
+**python:** Check if `pytest` is in `pyproject.toml` or `requirements.txt` — if so, `CMD_TEST="pytest"`, else `CMD_TEST="python -m unittest"`. Check for `ruff` → `CMD_LINT="ruff check ."`, else `CMD_LINT="flake8"`.
+
+**go:** `CMD_TEST="go test ./..."`, `CMD_LINT="go vet ./..."`
+
+**rust:** `CMD_TEST="cargo test"`, `CMD_LINT="cargo clippy"`
+
+**android:** `CMD_TEST="./gradlew test"`, `CMD_LINT="./gradlew lint"`
+
+**generic:** `CMD_TEST='echo "configure commands.test in .devflow.yaml"'`, no lint/build.
+
+### Step 5 — Show detected values
+
+Print a summary before writing anything:
+
+```
+Detected:
+  stack:       <STACK>
+  base_branch: <BASE_BRANCH>
+  test:        <CMD_TEST>
+  lint:        <CMD_LINT or "(none)">
+  build:       <CMD_BUILD or "(none)">
+
+Creating .devflow.yaml and .claude/agents/<stack>.md ...
+```
+
+### Step 6 — Write .devflow.yaml
+
+Write the file at `.devflow.yaml` with the detected values. Omit `commands.lint` and `commands.build` if not detected. Always include `fallback.mode: generic` and `telemetry.enabled: true`.
+
+Example output for Flutter:
+```yaml
+version: 1
+base_branch: main
+models:
+  plan: claude-opus-4-8
+  execution: claude-sonnet-4-6
+commands:
+  test: flutter test
+  lint: flutter analyze
+  build: flutter build apk
+fallback:
+  mode: generic
+telemetry:
+  enabled: true
+  path: .devflow/runs/
+```
+
+### Step 7 — Write specialist agent
+
+Create `.claude/agents/<stack>.md` if it does not already exist. Use the template for the detected stack:
+
+**flutter** → `.claude/agents/flutter.md`:
+```markdown
+---
+name: flutter
+description: Flutter/Dart specialist
+---
+
+Use Flutter 3+ with Dart. Prefer Riverpod for state management if already used.
+Follow existing widget patterns in lib/. Use StatelessWidget unless state is needed.
+Colocate tests in test/ mirroring lib/ structure.
+No new pub dependencies without checking pubspec.yaml first.
+Run `flutter analyze` before considering a change done.
+```
+
+**typescript** → `.claude/agents/typescript.md`:
+```markdown
+---
+name: typescript
+description: TypeScript/Node.js specialist
+---
+
+TypeScript strict mode. Follow existing tsconfig.json settings.
+Prefer functional patterns. Follow existing folder structure in src/.
+Write tests alongside source files using the existing test runner.
+No new dependencies without checking package.json first.
+```
+
+**node** → `.claude/agents/node.md`:
+```markdown
+---
+name: node
+description: Node.js/JavaScript specialist
+---
+
+Follow existing code style and folder structure.
+Write tests alongside source files using the existing test runner.
+No new dependencies without checking package.json first.
+Prefer async/await over callbacks.
+```
+
+**python** → `.claude/agents/python.md`:
+```markdown
+---
+name: python
+description: Python specialist
+---
+
+Follow PEP 8 and existing code style. Use type hints throughout.
+Follow existing project structure. Write tests in tests/ with pytest.
+No new dependencies without checking pyproject.toml or requirements.txt first.
+Use existing virtual environment conventions.
+```
+
+**go** → `.claude/agents/golang.md`:
+```markdown
+---
+name: golang
+description: Go specialist
+---
+
+Follow standard Go conventions and existing package structure.
+Error handling: always check and wrap errors with context.
+Write table-driven tests in *_test.go files alongside source.
+No new module dependencies without checking go.mod first.
+```
+
+**rust** → `.claude/agents/rust.md`:
+```markdown
+---
+name: rust
+description: Rust specialist
+---
+
+Follow existing module structure. Use idiomatic Rust — prefer iterators, avoid clone.
+Write tests in the same file under #[cfg(test)].
+No new crate dependencies without checking Cargo.toml first.
+Run `cargo clippy` before considering a change done.
+```
+
+**android** → `.claude/agents/android.md`:
+```markdown
+---
+name: android
+description: Android/Kotlin specialist
+---
+
+Follow existing Kotlin code style and architecture patterns.
+Use existing dependency injection setup. Write unit tests with JUnit.
+No new Gradle dependencies without checking build.gradle first.
+Run `./gradlew lint` before considering a change done.
+```
+
+**generic** → `.claude/agents/generic-specialist.md`:
+```markdown
+---
+name: generic-specialist
+description: Generic specialist — reads and follows project conventions
+---
+
+Read existing code patterns before writing anything.
+Follow the conventions already established in the codebase.
+Write tests consistent with the existing test setup.
+No new dependencies without checking existing manifests first.
+```
+
+### Step 8 — Report
+
+Determine the recommended Claude Code skill for the detected stack:
+- flutter → `flutter-expert`
+- typescript → `typescript-pro`
+- node → `javascript-pro`
+- python → `python-pro`
+- go → `golang-pro`
+- rust → `rust-engineer`
+- android → `kotlin-specialist`
+- generic → (no suggestion)
+
+Print the files created and next steps:
+
+```
+Done.
+  Created: .devflow.yaml
+  Created: .claude/agents/<stack>.md
+
+Next: /devflow start <task description>
+Tip: your specialist at .claude/agents/<stack>.md can invoke the `<skill>` skill for deeper stack knowledge.
+```
+
+Omit the Tip line for generic stack.
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `start` or `status`, respond:
+If `$SUBCMD` is not `init`, `start`, or `status`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
+  /devflow init
   /devflow start <task description>
   /devflow status
 ```
