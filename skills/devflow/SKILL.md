@@ -57,6 +57,7 @@ GATE_TESTS=$(yq e '.gates.require_tests_pass // "true"' .devflow.yaml 2>/dev/nul
 GATE_LINT=$(yq e '.gates.require_lint_pass // "true"' .devflow.yaml 2>/dev/null || echo "true")
 DEPLOY_BEFORE_PR=$(yq e '.gates.deploy_before_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
 AUTO_PR=$(yq e '.gates.auto_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
+DRAFT_PR=$(yq e '.gates.draft_pr // "true"' .devflow.yaml 2>/dev/null || echo "true")
 FALLBACK_MODE=$(yq e '.fallback.mode // "generic"' .devflow.yaml 2>/dev/null || echo "generic")
 MAX_TOKENS=$(yq e '.limits.max_tokens_per_run // "0"' .devflow.yaml 2>/dev/null || echo "0")
 ON_LIMIT=$(yq e '.limits.on_limit // "confirm"' .devflow.yaml 2>/dev/null || echo "confirm")
@@ -224,6 +225,15 @@ git commit -m "feat: $SUBARGS"
 git push origin "devflow/$TASK_SLUG"
 ```
 
+Read PR template if present:
+
+```bash
+PR_TEMPLATE=""
+if [ -f ".devflow/pr-template.md" ]; then
+  PR_TEMPLATE=$(cat ".devflow/pr-template.md")
+fi
+```
+
 Build the PR body from the telemetry JSONL:
 
 ```bash
@@ -247,7 +257,14 @@ if [ -f "$TELEMETRY_FILE" ]; then
   done < "$TELEMETRY_FILE"
 fi
 
-PR_BODY="## Changes
+TEMPLATE_SECTION=""
+[ -n "$PR_TEMPLATE" ] && TEMPLATE_SECTION="${PR_TEMPLATE}
+
+---
+
+"
+
+PR_BODY="${TEMPLATE_SECTION}## Changes
 ${SUBARGS}
 
 ## DevFlow run \`${RUN_ID}\`
@@ -261,10 +278,17 @@ ${PHASE_ROWS}
 🤖 Automated by [DevFlow](https://github.com/lennoncastro/dev-flow)"
 ```
 
+Set draft flag:
+
+```bash
+DRAFT_FLAG=""
+[ "$DRAFT_PR" = "true" ] && DRAFT_FLAG="--draft"
+```
+
 If `$AUTO_PR=true`, open the PR immediately without asking:
 
 ```bash
-gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH"
+gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH" $DRAFT_FLAG
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=pr" "status=opened"
 ```
 
@@ -273,6 +297,7 @@ If `$AUTO_PR=false`, show a preview and ask the user to confirm before running:
 ```
 Ready to open PR:
   Title: feat: <SUBARGS>
+  Draft: <yes if DRAFT_PR=true, no otherwise>
   Body preview:
     ## Changes
     <SUBARGS>
@@ -282,7 +307,7 @@ Ready to open PR:
 Open the PR? (y/N)
 ```
 
-Only run `gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH"` after the user confirms.
+Only run `gh pr create --title "feat: $SUBARGS" --body "$PR_BODY" --base "$BASE_BRANCH" $DRAFT_FLAG` after the user confirms.
 
 ### Step 15 — Post-PR deploy (optional)
 
@@ -537,6 +562,8 @@ commands:
   build: flutter build apk
 fallback:
   mode: generic
+gates:
+  draft_pr: true
 telemetry:
   enabled: true
   path: .devflow/runs/
@@ -735,6 +762,7 @@ Done.
 
 Next: /devflow start <task description>
 Tip: your specialist at .claude/agents/<stack>.md can invoke the `<skill>` skill for deeper stack knowledge.
+Tip: create `.devflow/pr-template.md` to customize PR descriptions.
 ```
 
 Omit the Tip line for generic stack. Omit the `settings.json` line if `$PLUGIN_SCRIPTS` was empty.
