@@ -1,0 +1,249 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/lennoncastro/dev-flow/main/schema.json",
+  "title": "DevFlow configuration",
+  "description": "Schema for .devflow.yaml — the configuration contract for the DevFlow Claude Code plugin.",
+  "type": "object",
+  "required": ["version", "base_branch", "models", "commands"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "title": "Schema version",
+      "description": "Version of the .devflow.yaml schema. Must be 1. The motor rejects incompatible versions before starting any worktree.",
+      "type": "integer",
+      "enum": [1]
+    },
+    "base_branch": {
+      "title": "Base branch",
+      "description": "Git branch from which every worktree is created. The motor never operates directly on this branch.",
+      "type": "string"
+    },
+    "models": {
+      "title": "Model configuration",
+      "description": "AI models used by each phase. Model IDs are opaque to the plugin — they are passed through as-is.",
+      "type": "object",
+      "required": ["plan", "execution"],
+      "additionalProperties": false,
+      "properties": {
+        "plan": {
+          "title": "Plan model",
+          "description": "Model used in the planning phase. Prefer a strong reasoning model.",
+          "type": "string"
+        },
+        "execution": {
+          "title": "Execution model",
+          "description": "Model used during fan-out execution by specialist agents.",
+          "type": "string"
+        },
+        "review": {
+          "title": "Review model",
+          "description": "Model used in the self-review phase. Defaults to the plan model if omitted.",
+          "type": "string"
+        }
+      }
+    },
+    "commands": {
+      "title": "Project commands",
+      "description": "Shell commands executed by the motor inside the worktree. All commands are run in the worktree root.",
+      "type": "object",
+      "required": ["test"],
+      "additionalProperties": false,
+      "properties": {
+        "test": {
+          "title": "Test command",
+          "description": "Test suite command. Required. Run after execution; blocks PR if it fails and gates.require_tests_pass is true.",
+          "type": "string"
+        },
+        "lint": {
+          "title": "Lint command",
+          "description": "Lint command. Optional — skipped if absent.",
+          "type": "string"
+        },
+        "build": {
+          "title": "Build command",
+          "description": "Build command. Optional — skipped if absent.",
+          "type": "string"
+        },
+        "deploy": {
+          "title": "Deploy command",
+          "description": "Deploy command. Optional — skipped if absent. Position controlled by gates.deploy_before_pr.",
+          "type": "string"
+        }
+      }
+    },
+    "fan_out": {
+      "title": "Fan-out configuration",
+      "description": "Controls parallel specialist agent execution for multi-scope tasks (e.g. monorepos).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "title": "Enable fan-out",
+          "description": "When true, the motor spawns one specialist agent per discovered scope up to max_agents.",
+          "type": "boolean",
+          "default": false
+        },
+        "max_agents": {
+          "title": "Max agents",
+          "description": "Maximum number of specialist agents to spawn in parallel. Must be >= 1.",
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "on_partial_failure": {
+          "title": "On partial failure",
+          "description": "Behavior when one or more agents fail: abort cancels the entire run, isolate continues with passing scopes, retry re-runs failed agents.",
+          "type": "string",
+          "enum": ["abort", "isolate", "retry"],
+          "default": "abort"
+        },
+        "retry_limit": {
+          "title": "Retry limit",
+          "description": "Number of automatic retries when on_partial_failure is 'retry'. Only meaningful with on_partial_failure: retry.",
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+    "gates": {
+      "title": "Gate configuration",
+      "description": "Controls which checks gate the PR and how the motor behaves at each checkpoint.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "require_tests_pass": {
+          "title": "Require tests to pass",
+          "description": "When true, a failing test command blocks the PR. When false, test failures are logged but not blocking.",
+          "type": "boolean",
+          "default": true
+        },
+        "require_lint_pass": {
+          "title": "Require lint to pass",
+          "description": "When true, a failing lint command blocks the PR. Ignored if commands.lint is not set.",
+          "type": "boolean",
+          "default": true
+        },
+        "deploy_before_pr": {
+          "title": "Deploy before PR",
+          "description": "When false (default), the PR is the gate and deploy runs after merge. When true, deploy runs before the PR is opened (e.g. preview/staging environments).",
+          "type": "boolean",
+          "default": false
+        },
+        "auto_pr": {
+          "title": "Auto PR",
+          "description": "When false (default), the motor shows the gh pr create command and asks for confirmation. When true, the PR is opened automatically.",
+          "type": "boolean",
+          "default": false
+        },
+        "draft_pr": {
+          "title": "Draft PR",
+          "description": "When true (default), PRs are opened as drafts. Set to false to open ready-for-review PRs directly.",
+          "type": "boolean",
+          "default": true
+        },
+        "require_diff_review": {
+          "title": "Require diff review",
+          "description": "When true (default), the motor shows a git diff and asks for confirmation before committing. Set to false to skip this step.",
+          "type": "boolean",
+          "default": true
+        },
+        "ci_timeout": {
+          "title": "CI timeout (seconds)",
+          "description": "Seconds to wait for CI checks after opening the PR. Set to 0 to disable CI polling.",
+          "type": "integer",
+          "minimum": 0,
+          "default": 300
+        }
+      }
+    },
+    "fallback": {
+      "title": "Specialist fallback",
+      "description": "Behavior when no specialist agent is found for the task scope.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "title": "Fallback mode",
+          "description": "generic: use the plugin's built-in generic agent. refuse: stop and ask the user to create a specialist.",
+          "type": "string",
+          "enum": ["generic", "refuse"],
+          "default": "generic"
+        },
+        "generic_agent": {
+          "title": "Generic agent path",
+          "description": "Path to a custom generic agent file. Optional — defaults to the plugin's bundled generic agent.",
+          "type": "string"
+        }
+      }
+    },
+    "spec": {
+      "title": "Spec tool integration",
+      "description": "Optional integration with an external spec/requirements tool.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "title": "Spec tool",
+          "description": "Name of the external spec tool. When absent, no spec step is managed.",
+          "type": "string"
+        },
+        "require_approved": {
+          "title": "Require approved spec",
+          "description": "When true and spec.tool is set, the motor requires an approved spec before generating tasks.",
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "limits": {
+      "title": "Resource limits",
+      "description": "Optional limits on resource usage per run.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_tokens_per_run": {
+          "title": "Max tokens per run",
+          "description": "Estimated token budget per run. 0 means no limit. When exceeded, behavior is controlled by on_limit.",
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "on_limit": {
+          "title": "On limit",
+          "description": "Behavior when max_tokens_per_run is exceeded: confirm asks the user to proceed, abort stops immediately.",
+          "type": "string",
+          "enum": ["confirm", "abort"],
+          "default": "confirm"
+        },
+        "retry_limit": {
+          "title": "Retry limit",
+          "description": "Number of automatic retries on test or lint gate failure. Applies to gates, not fan-out agents.",
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+    "telemetry": {
+      "title": "Telemetry",
+      "description": "Controls structured run logging (JSONL files per run).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "title": "Enable telemetry",
+          "description": "When true (default), each run writes a JSONL file with phase events, timings, and specialist routing.",
+          "type": "boolean",
+          "default": true
+        },
+        "path": {
+          "title": "Telemetry path",
+          "description": "Directory where JSONL run files are written.",
+          "type": "string",
+          "default": ".devflow/runs/"
+        }
+      }
+    }
+  }
+}

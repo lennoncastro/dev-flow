@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow queue <task1> && <task2> | /devflow retry [run-id] | /devflow pause [run-id] | /devflow resume [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow diff [run-id] | /devflow history | /devflow config [show] | /devflow specialist add | /devflow specialist validate | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow gc [--older-than=<N>d] | /devflow update
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] [--from-issue=<url>] <task> | /devflow plan <task> | /devflow queue <task1> && <task2> | /devflow retry [run-id] | /devflow pause [run-id] | /devflow resume [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow diff [run-id] | /devflow history | /devflow config [show] | /devflow specialist add | /devflow specialist validate | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow gc [--older-than=<N>d] | /devflow update
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -26,11 +26,42 @@ if echo "$SUBARGS" | grep -q -- '--dry-run'; then
   DRY_RUN=true
   SUBARGS=$(echo "$SUBARGS" | sed 's/--dry-run//g' | xargs)
 fi
+
+FROM_ISSUE=""
+if echo "$SUBARGS" | grep -q -- '--from-issue'; then
+  FROM_ISSUE=$(echo "$SUBARGS" | grep -o -- '--from-issue=[^ ]*' | cut -d= -f2)
+  [ -z "$FROM_ISSUE" ] && FROM_ISSUE=$(echo "$SUBARGS" | sed 's/.*--from-issue //' | awk '{print $1}')
+  SUBARGS=$(echo "$SUBARGS" | sed 's/--from-issue[= ][^ ]*//' | xargs)
+fi
 ```
 
 Execute the DevFlow workflow for the task described in `$SUBARGS`.
 
 You are the DevFlow motor. Follow every step below in order. Never operate directly on the base branch. Never skip a gate. Never hardcode any stack, model, or command.
+
+### Step 0 — Fetch issue (only if --from-issue was passed)
+
+If `$FROM_ISSUE` is non-empty:
+
+```bash
+ISSUE_DATA=$(gh issue view "$FROM_ISSUE" --json title,body,number 2>/dev/null)
+```
+
+If `$ISSUE_DATA` is empty: "DevFlow: could not fetch issue from '`$FROM_ISSUE`'. Check the URL and gh auth status." and stop.
+
+```bash
+ISSUE_TITLE=$(echo "$ISSUE_DATA" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("title",""))' 2>/dev/null || true)
+ISSUE_NUMBER=$(echo "$ISSUE_DATA" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("number",""))' 2>/dev/null || true)
+ISSUE_BODY=$(echo "$ISSUE_DATA" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("body","")[:1000])' 2>/dev/null || true)
+ISSUE_CONTEXT="GitHub issue #${ISSUE_NUMBER}: ${ISSUE_TITLE}\n\n${ISSUE_BODY}"
+```
+
+Show:
+```
+DevFlow: loaded issue #<ISSUE_NUMBER> — <ISSUE_TITLE>
+```
+
+If `$SUBARGS` is empty, set `SUBARGS="$ISSUE_TITLE"`.
 
 ### Step 1 — Validate config
 
@@ -109,6 +140,8 @@ Using model `$MODEL_PLAN`, produce a structured plan for the task. Identify:
 - Which files/directories will be touched
 - Scopes (for specialist discovery and fan-out)
 - Sub-tasks that can be parallelized
+
+If `$ISSUE_CONTEXT` is non-empty, include it as additional context for the plan alongside the task description — it contains the full issue title and body from GitHub.
 
 Record touched paths in `$TOUCHED_PATHS` (space-separated).
 
