@@ -61,35 +61,27 @@ apps/
 | Multiple (monorepo) | Fan-out — one agent per scope, capped by `fan_out.max_agents` |
 | None found | `fallback` config applies (`generic` or `refuse`) |
 
-## Debugging guidance
-
-Specialists should include a `## Debugging` section when the stack has a clear investigation pattern. This section tells the motor how to approach a bug before writing any fix.
-
-The motor passes the full task description to the specialist. If the task starts with `"fix:"`, the specialist's debugging section kicks in:
-
-```markdown
-## Debugging
-
-When the task starts with "fix:", before writing any code:
-1. Reproduce the error — add a failing test or run the scenario manually
-2. Read the relevant logs or stack trace to identify root cause
-3. Fix only what the root cause points to
-4. Confirm the reproduction step now passes
-```
-
-**Why this lives in the specialist, not the motor:** different stacks debug differently.
-- Flutter: `flutter run` + DevTools logs
-- Django/FastAPI: server tracebacks, `print()` or structured logging
-- PostgreSQL: `EXPLAIN ANALYZE` on the slow query
-- Android: Logcat filtered by tag
-- React: browser console + React DevTools
-
-The motor has no opinion on any of these. The specialist is the right place for stack-specific investigation steps.
-
-Keep debugging sections short (3–5 lines). The motor reads the whole specialist body — dense instructions degrade quality.
-
 ## Constraints
 
 - No hardcoded branch names, model names, or deploy commands.
 - No orchestration logic of any kind.
 - Specialists own conventions and debugging approach; the motor owns the workflow.
+
+## Debugging convention
+
+Specialists may include a `## Debugging` section describing how to investigate bugs before fixing them. When the motor receives a task starting with `fix:`, the specialist uses this section to guide investigation.
+
+Recommended pattern:
+1. Reproduce the bug reliably with the stack's tools
+2. Write a failing test that demonstrates the issue
+3. Fix the code
+4. Confirm the test passes
+
+Example (Flutter):
+```markdown
+## Debugging
+Before fixing a bug: reproduce it with `flutter run` and capture the full stack trace.
+Check `flutter logs` for device output. Write a failing test that reproduces the issue before changing any production code.
+```
+
+The `## Debugging` section is optional — the motor proceeds without it, but investigation quality degrades.
