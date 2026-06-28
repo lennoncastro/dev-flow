@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow pause [run-id] | /devflow resume [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow history | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow pause [run-id] | /devflow resume [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow diff [run-id] | /devflow history | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow gc [--older-than=<N>d] | /devflow update
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -1859,9 +1859,101 @@ If no runs match after filtering: "No runs found matching filters."
 
 ---
 
+## Subcommand: diff
+
+Triggered when `$SUBCMD = diff`. Optional run ID in `$SUBARGS`.
+
+Shows the git diff of a run's worktree without committing — useful to review changes before the motor opens a PR.
+
+### Step 1 — Find the run
+
+```bash
+TELEMETRY_DIR=$(grep -A1 'path:' .devflow.yaml 2>/dev/null | tail -1 | awk '{print $2}' || echo ".devflow/runs/")
+if [ -n "$SUBARGS" ] && [ "$SUBARGS" != "$SUBCMD" ]; then
+  RUN_FILE="${TELEMETRY_DIR}/${SUBARGS}.jsonl"
+else
+  RUN_FILE=$(ls -t "${TELEMETRY_DIR}"*.jsonl 2>/dev/null | head -1)
+fi
+```
+
+If not found: "No run found." and stop.
+
+### Step 2 — Locate worktree
+
+```bash
+RUN_ID=$(basename "$RUN_FILE" .jsonl)
+TASK_SLUG=$(echo "$RUN_ID" | sed 's/-[0-9]*$//')
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE="${REPO_ROOT}/.devflow/worktrees/${TASK_SLUG}"
+```
+
+If `$WORKTREE` does not exist: "Worktree not found for run `$RUN_ID`. It may have been cleaned up." and stop.
+
+### Step 3 — Show diff
+
+```bash
+echo "DevFlow diff — run ${RUN_ID}"
+echo "Worktree: ${WORKTREE}"
+echo "────────────────────────────────────────"
+git -C "$WORKTREE" diff HEAD 2>/dev/null || git -C "$WORKTREE" diff 2>/dev/null || echo "(no changes staged)"
+echo "────────────────────────────────────────"
+git -C "$WORKTREE" diff --stat HEAD 2>/dev/null || true
+```
+
+---
+
+## Subcommand: gc
+
+Triggered when `$SUBCMD = gc`. Optional flag `--older-than=<N>d` in `$SUBARGS`.
+
+Garbage-collect old JSONL telemetry files from `.devflow/runs/`.
+
+### Step 1 — Parse retention
+
+```bash
+OLDER_THAN_DAYS=30
+echo "$SUBARGS" | grep -q -- '--older-than=' && OLDER_THAN_DAYS=$(echo "$SUBARGS" | grep -o -- '--older-than=[^ ]*' | cut -d= -f2 | tr -d 'd')
+```
+
+### Step 2 — Find telemetry dir
+
+```bash
+TELEMETRY_DIR=".devflow/runs"
+if [ -f ".devflow.yaml" ]; then
+  CONFIGURED=$(grep -E '^  path:' .devflow.yaml | awk '{print $2}' | tr -d '"' | tr -d "'" || true)
+  [ -n "$CONFIGURED" ] && TELEMETRY_DIR="$CONFIGURED"
+fi
+```
+
+If dir doesn't exist: "No telemetry directory found." and stop.
+
+### Step 3 — Find and list candidates
+
+```bash
+find "$TELEMETRY_DIR" -name "*.jsonl" -mtime +${OLDER_THAN_DAYS} 2>/dev/null
+```
+
+Count candidates. If 0: "No runs older than `${OLDER_THAN_DAYS}` days found." and stop.
+
+### Step 4 — Confirm and delete
+
+Show list of files to delete and ask:
+```
+Found <N> run(s) older than <OLDER_THAN_DAYS> days. Delete them? (y/N)
+```
+
+If confirmed:
+```bash
+find "$TELEMETRY_DIR" -name "*.jsonl" -mtime +${OLDER_THAN_DAYS} -delete
+```
+
+Report: "Deleted `<N>` run file(s)."
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, `open`, `history`, `pause`, or `resume`, respond:
+If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, `open`, `diff`, `gc`, `history`, `pause`, or `resume`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
@@ -1876,7 +1968,9 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow status [--watch]
   /devflow logs [run-id]
   /devflow open [run-id]
+  /devflow diff [run-id]
   /devflow history [--status=<success|failed|running>] [--since=<7d|24h>] [--task=<keyword>]
+  /devflow gc [--older-than=<N>d]
   /devflow config
   /devflow specialist add
   /devflow doctor
