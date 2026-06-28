@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow pause [run-id] | /devflow resume [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow history | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow pause [run-id] | /devflow resume [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow history | /devflow queue <task1> && <task2> | /devflow config [show] | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -1006,6 +1006,36 @@ Triggered when `$SUBCMD = config`.
 
 If `.devflow.yaml` does not exist, respond: "No .devflow.yaml found. Run /devflow init first." and stop.
 
+### Show action
+
+If `$SUBARGS` starts with `show`:
+
+```bash
+if echo "$SUBARGS" | grep -qE '^show'; then
+  echo "DevFlow config — current values"
+  echo "──────────────────────────────────────────"
+  cat .devflow.yaml
+  echo "──────────────────────────────────────────"
+  echo ""
+  echo "Resolved values:"
+  echo "  base_branch:  $(yq e '.base_branch' .devflow.yaml 2>/dev/null || grep -E '^base_branch:' .devflow.yaml | awk '{print $2}')"
+  echo "  plan model:   $(yq e '.models.plan' .devflow.yaml 2>/dev/null || echo '(not set)')"
+  echo "  exec model:   $(yq e '.models.execution' .devflow.yaml 2>/dev/null || echo '(not set)')"
+  echo "  test command: $(yq e '.commands.test // \"(not set)\"' .devflow.yaml 2>/dev/null || echo '(not set)')"
+  echo "  lint command: $(yq e '.commands.lint // \"(not set)\"' .devflow.yaml 2>/dev/null || echo '(not set)')"
+  echo "  auto_pr:      $(yq e '.gates.auto_pr // \"false\"' .devflow.yaml 2>/dev/null || echo 'false')"
+  echo "  telemetry:    $(yq e '.telemetry.path // \".devflow/runs/\"' .devflow.yaml 2>/dev/null || echo '.devflow/runs/')"
+  echo ""
+  echo "To edit: /devflow config"
+fi
+```
+
+Stop after displaying. Do not run the wizard.
+
+If `$SUBARGS` is empty or does not start with `show`: run the interactive wizard below.
+
+---
+
 This is an **interactive wizard**. Read the current `.devflow.yaml`, then guide the user through reviewing and changing settings conversationally — one group at a time. Do not dump raw YAML. Do not process `get`/`set` as flags — just run the wizard.
 
 ---
@@ -1802,15 +1832,80 @@ If no runs match after filtering: "No runs found matching filters."
 
 ---
 
+## Subcommand: queue
+
+Triggered when `$SUBCMD = queue`. Task descriptions in `$SUBARGS`, separated by `&&`.
+
+### Step 1 — Parse tasks
+
+```bash
+IFS='&&' read -ra QUEUE_TASKS <<< "$SUBARGS"
+QUEUE_TASKS=("${QUEUE_TASKS[@]// /}")  # trim whitespace
+N=${#QUEUE_TASKS[@]}
+```
+
+If `$N = 0` or `$SUBARGS` is empty: "Usage: /devflow queue \"task1\" && \"task2\" && ..." and stop.
+
+### Step 2 — Show queue and confirm
+
+```
+DevFlow queue — <N> tasks queued:
+  1. <task 1>
+  2. <task 2>
+  ...
+
+Run all in sequence? (y/N)
+```
+
+Wait for user response. If N or empty: stop.
+
+### Step 3 — Run each task in sequence
+
+Initialize tracking:
+```bash
+declare -A QUEUE_RESULTS  # task index → "pr:<url>" or "failed:<phase>"
+```
+
+For each task (index I from 1 to N):
+
+```
+──────────────────────────────────────────
+DevFlow queue: running task <I>/<N> — "<task>"
+──────────────────────────────────────────
+```
+
+Run the full `start` workflow (Steps 1–16) for that task. Track the PR URL from Step 14.
+
+If a task fails at any gate:
+- Log: `QUEUE_RESULTS[$I]="failed:<phase>"`
+- Ask: "Task <I>/<N> failed at <phase>. Continue with remaining tasks? (y/N)"
+  - If N: break and go to Step 4 immediately
+  - If y: continue to next task
+- If success: `QUEUE_RESULTS[$I]="pr:<PR_URL>"`
+
+### Step 4 — Summary
+
+```
+DevFlow queue complete (<completed>/<N> tasks succeeded)
+──────────────────────────────────────────────────────
+  ✅ <task 1>   → <PR URL>
+  ✅ <task 2>   → <PR URL>
+  ❌ <task 3>   → failed at <phase>
+──────────────────────────────────────────────────────
+```
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, `open`, `history`, `pause`, or `resume`, respond:
+If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, `open`, `history`, `pause`, `resume`, or `queue`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow init
   /devflow start [--auto-pr] [--dry-run] <task description>
   /devflow plan <task description>
+  /devflow queue <task1> && <task2> && ...
   /devflow retry [run-id]
   /devflow pause [run-id]
   /devflow resume [run-id]
@@ -1820,7 +1915,7 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow logs [run-id]
   /devflow open [run-id]
   /devflow history [--status=<success|failed|running>] [--since=<7d|24h>] [--task=<keyword>]
-  /devflow config
+  /devflow config [show]
   /devflow specialist add
   /devflow doctor
   /devflow clean
