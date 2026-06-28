@@ -466,105 +466,98 @@ Omit the Tip line for generic stack.
 
 Triggered when `$SUBCMD = config`.
 
-Parse the sub-subcommand and arguments:
+If `.devflow.yaml` does not exist, respond: "No .devflow.yaml found. Run /devflow init first." and stop.
 
-```bash
-CONFIG_CMD=$(echo "$SUBARGS" | awk '{print $1}')   # get | set | (empty)
-CONFIG_KEY=$(echo "$SUBARGS" | awk '{print $2}')
-CONFIG_VAL=$(echo "$SUBARGS" | awk '{print $3}')
-```
-
-If `.devflow.yaml` does not exist, respond: "No .devflow.yaml found. Run /devflow init first."
+This is an **interactive wizard**. Read the current `.devflow.yaml`, then guide the user through reviewing and changing settings conversationally — one group at a time. Do not dump raw YAML. Do not process `get`/`set` as flags — just run the wizard.
 
 ---
 
-### No args — show config summary
+### Step 1 — Read current config
 
-When `$CONFIG_CMD` is empty, read and display all fields:
+Read all fields from `.devflow.yaml` using yq (or grep fallback).
 
-```bash
-yq_read() { yq e "${1} // \"(not set)\"" .devflow.yaml 2>/dev/null || grep -E "^${2}:" .devflow.yaml | awk '{print $2}' || echo "(not set)"; }
-```
+### Step 2 — Show summary and open the wizard
 
-Display:
+Display current values in a friendly, readable format:
 
 ```
-DevFlow config (.devflow.yaml)
+DevFlow config — current settings
 
-  version:        <version>
-  base_branch:    <base_branch>
+  Base branch:    main
+  Plan model:     claude-opus-4-8
+  Exec model:     claude-sonnet-4-6
 
-  models:
-    plan:         <models.plan>
-    execution:    <models.execution>
+  Commands:
+    test:   flutter test
+    lint:   flutter analyze
+    build:  (not set)
+    deploy: (not set)
 
-  commands:
-    test:         <commands.test>
-    lint:         <commands.lint or "(not set)">
-    build:        <commands.build or "(not set)">
-    deploy:       <commands.deploy or "(not set)">
-
-  fan_out:
-    enabled:      <fan_out.enabled or "false">
-    max_agents:   <fan_out.max_agents or "1">
-
-  gates:
-    auto_pr:             <gates.auto_pr or "false">
-    deploy_before_pr:    <gates.deploy_before_pr or "false">
-    require_tests_pass:  <gates.require_tests_pass or "true">
-    require_lint_pass:   <gates.require_lint_pass or "true">
-
-  fallback:
-    mode:         <fallback.mode or "generic">
-
-  telemetry:
-    enabled:      <telemetry.enabled or "true">
-    path:         <telemetry.path or ".devflow/runs/">
+  Fan-out:    disabled
+  Auto PR:    false
+  Fallback:   generic
+  Telemetry:  enabled → .devflow/runs/
 ```
 
----
+Then ask:
 
-### get — read a single key
+"Which setting would you like to change? You can say the name (e.g. 'base branch', 'test command', 'auto pr') or type a number:
 
-When `$CONFIG_CMD = get`:
+  1. Base branch
+  2. Models (plan / execution)
+  3. Commands (test / lint / build / deploy)
+  4. Fan-out
+  5. Gates (auto PR / deploy / test gate / lint gate)
+  6. Fallback mode
+  7. Telemetry
+  8. Done"
 
-```bash
-VALUE=$(yq e ".$CONFIG_KEY" .devflow.yaml 2>/dev/null)
-```
+### Step 3 — Handle user selection
 
-If value is empty or null, respond: "Key '$CONFIG_KEY' not found in .devflow.yaml"
-Otherwise print the value.
+Wait for user response, then guide them through the relevant setting:
 
----
+**1 — Base branch:** "Current: `<value>`. New value?" → update `base_branch`
 
-### set — update a key
+**2 — Models:** Ask plan model first ("Current plan model: `<value>`. New value or Enter to keep?"), then execution model.
 
-When `$CONFIG_CMD = set`:
+**3 — Commands:** Go through test, lint, build, deploy one by one. For each: show current value, ask for new value or Enter to keep. "(not set)" means the command is optional and currently absent — user can type a command or Enter to leave unset.
 
-If `yq` is not available: "yq is required to set config values. Install with: brew install yq  or  snap install yq"
+**4 — Fan-out:** "Fan-out is currently `<enabled/disabled>`. Enable it? (y/n)" → if yes, ask max_agents and on_partial_failure.
 
-Otherwise:
+**5 — Gates:** Go through auto_pr, deploy_before_pr, require_tests_pass, require_lint_pass. For booleans: show current, ask "y/n or Enter to keep".
 
-For boolean values (`true`/`false`), write without quotes:
-```bash
-yq e -i ".$CONFIG_KEY = $CONFIG_VAL" .devflow.yaml
-```
+**6 — Fallback mode:** "Current: `<generic/refuse>`. Change to `<the other option>`? (y/n)"
+
+**7 — Telemetry:** "Telemetry is `<enabled/disabled>`. Toggle? (y/n)" → if enabled, also ask path.
+
+**8 — Done:** Stop the wizard.
+
+### Step 4 — Apply changes
+
+After collecting all changes for the selected group, update `.devflow.yaml` using:
 
 For string values:
 ```bash
-yq e -i ".$CONFIG_KEY = \"$CONFIG_VAL\"" .devflow.yaml
+yq e -i ".<key> = \"<value>\"" .devflow.yaml
 ```
 
-Detect booleans: if `$CONFIG_VAL` is exactly `true` or `false`, treat as boolean.
+For boolean values:
+```bash
+yq e -i ".<key> = <true|false>" .devflow.yaml
+```
 
-After writing, confirm: "Set $CONFIG_KEY = $CONFIG_VAL in .devflow.yaml"
+If yq is not available, write the full file manually with the updated values using the Write tool.
 
-Supported keys (accept any dotted key, these are documented):
-- `base_branch`, `models.plan`, `models.execution`
-- `commands.test`, `commands.lint`, `commands.build`, `commands.deploy`
-- `fan_out.enabled`, `fan_out.max_agents`
-- `gates.auto_pr`, `gates.deploy_before_pr`, `gates.require_tests_pass`, `gates.require_lint_pass`
-- `fallback.mode`, `telemetry.enabled`, `telemetry.path`
+### Step 5 — Confirm and loop
+
+After applying, show what changed:
+```
+Updated:
+  commands.lint = flutter analyze
+  gates.auto_pr = true
+```
+
+Then ask: "Anything else to change? (number or 'done')" — loop back to Step 3 until user says done or types 8.
 
 ---
 
