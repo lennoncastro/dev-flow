@@ -1,8 +1,73 @@
 # DevFlow
 
-> **Status:** Pre-release — planning phase. Design documents exist; implementation has not started.
+> **Status:** Pre-release — implementation complete, not yet published to marketplace.
 
 A Claude Code plugin that packages a complete AI-assisted development workflow. Stack-agnostic: the plugin owns the orchestration engine; each project that installs it brings its own stack conventions via `.claude/agents/` subagents.
+
+## Installation
+
+```
+claude plugin install github:lennoncastro/dev-flow
+```
+
+Or add to your project's `.claude/settings.json`:
+
+```json
+{
+  "plugins": [
+    { "name": "devflow", "source": { "source": "github", "repo": "lennoncastro/dev-flow" } }
+  ]
+}
+```
+
+**Requirements:** Claude Code CLI, `git`, `gh` (GitHub CLI, authenticated), `jq`. `yq` is optional — scripts fall back to grep if absent.
+
+## Usage
+
+From any project with a `.devflow.yaml`:
+
+**Start a task:**
+
+```
+/devflow start add user authentication endpoint
+```
+
+DevFlow will:
+1. Validate `.devflow.yaml`
+2. Create an isolated git worktree from `base_branch`
+3. Plan the task
+4. Discover specialist agents by directory proximity
+5. Fan-out execution to specialists
+6. Run test and lint gates
+7. Self-review
+8. Open a PR (and optionally deploy)
+9. Clean up the worktree
+
+**Check run status:**
+
+```
+/devflow status
+```
+
+Shows all runs from `.devflow/runs/*.jsonl` — run ID, last event, status, timestamp.
+
+## Creating a specialist
+
+Add a `.claude/agents/<name>.md` anywhere in your repo. No declaration needed — placement is the routing signal.
+
+```markdown
+---
+name: node-api
+description: Node.js API specialist for this project
+---
+
+Follow the existing Express patterns in src/routes/.
+Use the project's validation middleware (src/middleware/validate.ts).
+Write tests with Vitest; place them alongside source files.
+Do not introduce new dependencies without checking package.json first.
+```
+
+See [`docs/specialist-contract.md`](docs/specialist-contract.md) for the full format spec.
 
 ## Problem
 
@@ -68,6 +133,18 @@ fallback:
   mode: generic                 # generic | refuse
 ```
 
+### 3. Install the plugin
+
+```
+claude plugin install github:lennoncastro/dev-flow
+```
+
+### 4. Run your first task
+
+```
+/devflow start your task description here
+```
+
 ### 2. Add specialists where they make sense
 
 No declaration required. Place agent files anywhere in your repo — the motor discovers them by directory proximity:
@@ -121,13 +198,13 @@ Full annotated schema: [`docs/devflow-schema.md`](docs/devflow-schema.md).
 ## Roadmap
 
 1. Schema defined — `docs/devflow-schema.md` ✓
-2. Specialist contract (format, discovery, routing, fallback)
-3. Motor hooks (parameterized, idempotent worktree cleanup)
-4. Run telemetry (JSONL → `.devflow/runs/`)
-5. Dogfood on single-stack fixture end-to-end
+2. Specialist contract (format, discovery, routing, fallback) ✓
+3. Motor hooks (parameterized, idempotent worktree cleanup) ✓
+4. Run telemetry (JSONL → `.devflow/runs/`) ✓
+5. Dogfood on single-stack fixture end-to-end ✓
 6. Generalize for monorepo + fallback
 7. Repo-fixtures + CI gate (required before any `git tag`)
-8. Example specialist (illustrates format, no stack opinions)
+8. Example specialist (illustrates format, no stack opinions) ✓
 9. Package and publish to marketplace
 
 ## Contributing
