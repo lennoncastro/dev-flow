@@ -544,7 +544,7 @@ telemetry:
 
 ### Step 7 — Register hook permissions
 
-Resolve the plugin scripts path and add an allow rule to `.claude/settings.json` so hook scripts can run without permission prompts.
+Resolve the plugin scripts path:
 
 ```bash
 if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
@@ -554,7 +554,17 @@ else
 fi
 ```
 
-If `$PLUGIN_SCRIPTS` is non-empty, merge the allow rule into `.claude/settings.json`:
+If `$PLUGIN_SCRIPTS` is non-empty, show the user the rule and ask for confirmation:
+
+```
+DevFlow: to allow hook scripts to run without prompts, add this to .claude/settings.json:
+
+  "permissions": { "allow": ["Bash(bash \"<PLUGIN_SCRIPTS>/*\")"] }
+
+Add it now? (y/N)
+```
+
+Only if the user confirms with `y` or `yes`, write it:
 
 ```bash
 mkdir -p .claude
@@ -564,14 +574,14 @@ path = ".claude/settings.json"
 cfg = json.load(open(path)) if os.path.exists(path) else {}
 perms = cfg.setdefault("permissions", {})
 allow = perms.setdefault("allow", [])
-rule = 'Bash(bash "${PLUGIN_SCRIPTS}/*")'
+rule = f'Bash(bash "{os.environ["PLUGIN_SCRIPTS"]}/*")'
 if rule not in allow:
     allow.append(rule)
 json.dump(cfg, open(path, "w"), indent=2)
 PYEOF
 ```
 
-Replace `${PLUGIN_SCRIPTS}` in the rule string with the actual resolved value of `$PLUGIN_SCRIPTS` before writing.
+If the user declines, skip silently — hooks will prompt for approval on first use.
 
 ### Step 9 — Write specialist agent
 
