@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow pause [run-id] | /devflow resume [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -1428,9 +1428,117 @@ gh pr view "$BRANCH" --web 2>/dev/null || echo "No PR found for branch ${BRANCH}
 
 ---
 
+## Subcommand: pause
+
+Triggered when `$SUBCMD = pause`. Optional run ID in `$SUBARGS`.
+
+### Step 1 — Find the run
+
+```bash
+TELEMETRY_DIR=$(grep -A1 'path:' .devflow.yaml 2>/dev/null | tail -1 | awk '{print $2}' || echo ".devflow/runs/")
+if [ -n "$SUBARGS" ] && [ "$SUBARGS" != "$SUBCMD" ]; then
+  RUN_FILE="${TELEMETRY_DIR}/${SUBARGS}.jsonl"
+else
+  RUN_FILE=$(ls -t "${TELEMETRY_DIR}"*.jsonl 2>/dev/null | head -1)
+fi
+```
+
+If not found: "No run found. Use /devflow status to list runs." and stop.
+
+### Step 2 — Check state
+
+```bash
+RUN_ID=$(basename "$RUN_FILE" .jsonl)
+LAST_EVENT=$(tail -1 "$RUN_FILE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event",""))' 2>/dev/null || true)
+```
+
+If `$LAST_EVENT` is `stop`, `fail`, or `pause`: "Run `$RUN_ID` is already finished/paused." and stop.
+
+### Step 3 — Log pause
+
+```bash
+LAST_PHASE=$(grep '"event":"phase"' "$RUN_FILE" | tail -1 | python3 -c 'import json,sys; print(json.load(sys.stdin).get("phase","unknown"))' 2>/dev/null || true)
+TASK_SLUG=$(echo "$RUN_ID" | sed 's/-[0-9]*$//')
+```
+
+**Run now:**
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" pause "$RUN_ID" "after_phase=${LAST_PHASE}"
+```
+
+### Step 4 — Report
+
+```
+Run <RUN_ID> paused after phase <LAST_PHASE>.
+  Worktree: .devflow/worktrees/<TASK_SLUG>  ← inspect changes here
+
+To resume: /devflow resume <RUN_ID>
+To abort:  /devflow abort <RUN_ID>
+```
+
+---
+
+## Subcommand: resume
+
+Triggered when `$SUBCMD = resume`. Optional run ID in `$SUBARGS`.
+
+### Step 1 — Find the run
+
+```bash
+TELEMETRY_DIR=$(grep -A1 'path:' .devflow.yaml 2>/dev/null | tail -1 | awk '{print $2}' || echo ".devflow/runs/")
+if [ -n "$SUBARGS" ] && [ "$SUBARGS" != "$SUBCMD" ]; then
+  RUN_FILE="${TELEMETRY_DIR}/${SUBARGS}.jsonl"
+else
+  RUN_FILE=$(ls -t "${TELEMETRY_DIR}"*.jsonl 2>/dev/null | head -1)
+fi
+```
+
+If not found: "No run found. Use /devflow status to list runs." and stop.
+
+### Step 2 — Check state
+
+```bash
+RUN_ID=$(basename "$RUN_FILE" .jsonl)
+LAST_EVENT=$(tail -1 "$RUN_FILE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event",""))' 2>/dev/null || true)
+```
+
+If `$LAST_EVENT` is `stop` or `fail`: "Run `$RUN_ID` is already finished." and stop.
+If `$LAST_EVENT` is NOT `pause`: "Run `$RUN_ID` is not paused (last event: `$LAST_EVENT`). Use /devflow abort to cancel." and stop.
+
+### Step 3 — Restore state
+
+```bash
+TASK_SLUG=$(echo "$RUN_ID" | sed 's/-[0-9]*$//')
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE="${REPO_ROOT}/.devflow/worktrees/${TASK_SLUG}"
+LAST_PHASE=$(grep '"event":"phase"' "$RUN_FILE" | grep -v '"phase":"resume"' | tail -1 | python3 -c 'import json,sys; print(json.load(sys.stdin).get("phase","unknown"))' 2>/dev/null || true)
+```
+
+Re-read config from `.devflow.yaml` (same as start Step 2).
+
+### Step 4 — Log resume and continue
+
+**Run now:**
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=resume" "from_phase=${LAST_PHASE}" "status=done"
+```
+
+Show: "Resuming run `$RUN_ID` from phase after `$LAST_PHASE`..."
+
+Determine next phase from `$LAST_PHASE` and resume the start workflow:
+- `discover` or earlier → resume from Step 8 (execute)
+- `execute` → resume from Step 9 (test)
+- `test` → resume from Step 10 (lint)
+- `lint` → resume from Step 11 (build)
+- `review` → resume from Step 14 (PR)
+
+Continue through Step 16 (cleanup).
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, or `open`, respond:
+If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, `open`, `pause`, or `resume`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
@@ -1438,6 +1546,8 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow start [--auto-pr] [--dry-run] <task description>
   /devflow plan <task description>
   /devflow retry [run-id]
+  /devflow pause [run-id]
+  /devflow resume [run-id]
   /devflow abort [run-id]
   /devflow rollback [run-id]
   /devflow status [--watch]
