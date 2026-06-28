@@ -1,0 +1,17 @@
+{
+  "name": "devflow",
+  "displayName": "DevFlow",
+  "version": "0.1.0",
+  "description": "AI-assisted development workflow plugin for Claude Code",
+  "author": {
+    "name": "Lennon Castro",
+    "email": "lennon.castro.92@gmail.com"
+  },
+  "repository": "https://github.com/lennoncastro/dev-flow",
+  "license": "MIT",
+  "keywords": ["workflow", "automation", "development"],
+  "category": "productivity",
+  "commands": ["./commands/devflow/"],
+  "agents": ["./agents/generic.md"],
+  "hooks": "./hooks/hooks.json"
+}
