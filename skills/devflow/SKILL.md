@@ -1318,12 +1318,12 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow plan <task description>
   /devflow retry [run-id]
   /devflow abort [run-id]
+  /devflow rollback [run-id]
   /devflow status
   /devflow logs [run-id]
   /devflow config
   /devflow specialist add
   /devflow doctor
   /devflow clean
-  /devflow rollback [run-id]
   /devflow update
 ```
