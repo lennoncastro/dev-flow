@@ -84,10 +84,7 @@ jobs:
         run: chmod +x scripts/*.sh
       - name: Reject config missing required fields
         run: |
-          cat > /tmp/invalid-missing.yaml <<'EOF'
-version: 1
-base_branch: main
-EOF
+          printf 'version: 1\nbase_branch: main\n' > /tmp/invalid-missing.yaml
           set +e
           scripts/validate-config.sh /tmp/invalid-missing.yaml
           EXIT=$?
@@ -95,18 +92,7 @@ EOF
           [ "$EXIT" -eq 1 ] || { echo "Expected exit 1 for config missing models/commands, got $EXIT"; exit 1; }
       - name: Reject fan_out with max_agents 0
         run: |
-          cat > /tmp/invalid-fanout.yaml <<'EOF'
-version: 1
-base_branch: main
-models:
-  plan: claude-opus-4-8
-  execution: claude-sonnet-4-6
-commands:
-  test: npm test
-fan_out:
-  enabled: true
-  max_agents: 0
-EOF
+          printf 'version: 1\nbase_branch: main\nmodels:\n  plan: claude-opus-4-8\n  execution: claude-sonnet-4-6\ncommands:\n  test: npm test\nfan_out:\n  enabled: true\n  max_agents: 0\n' > /tmp/invalid-fanout.yaml
           set +e
           scripts/validate-config.sh /tmp/invalid-fanout.yaml
           EXIT=$?
@@ -114,17 +100,7 @@ EOF
           [ "$EXIT" -eq 1 ] || { echo "Expected exit 1 for max_agents=0, got $EXIT"; exit 1; }
       - name: Reject spec.require_approved without spec.tool
         run: |
-          cat > /tmp/invalid-spec.yaml <<'EOF'
-version: 1
-base_branch: main
-models:
-  plan: claude-opus-4-8
-  execution: claude-sonnet-4-6
-commands:
-  test: npm test
-spec:
-  require_approved: true
-EOF
+          printf 'version: 1\nbase_branch: main\nmodels:\n  plan: claude-opus-4-8\n  execution: claude-sonnet-4-6\ncommands:\n  test: npm test\nspec:\n  require_approved: true\n' > /tmp/invalid-spec.yaml
           set +e
           scripts/validate-config.sh /tmp/invalid-spec.yaml
           EXIT=$?
