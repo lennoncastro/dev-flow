@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -872,9 +872,150 @@ Run <RUN_ID> aborted.
 
 ---
 
+## Subcommand: doctor
+
+Triggered when `$SUBCMD = doctor`.
+
+Run a series of environment and configuration checks. Print each result as a checklist line with ✅ or ❌.
+
+### Step 1 — Initialize counters and output
+
+```bash
+ISSUES=0
+OUTPUT=""
+```
+
+### Step 2 — Check .devflow.yaml
+
+```bash
+if [ ! -f ".devflow.yaml" ]; then
+  OUTPUT="${OUTPUT}\n  ❌  .devflow.yaml — not found (run /devflow init)"
+  ISSUES=$((ISSUES + 1))
+  CONFIG_MISSING=true
+else
+  CONFIG_MISSING=false
+  # Validate config
+  if "${CLAUDE_PLUGIN_ROOT}/scripts/validate-config.sh" ".devflow.yaml" &>/dev/null; then
+    OUTPUT="${OUTPUT}\n  ✅  .devflow.yaml — found and valid"
+  else
+    OUTPUT="${OUTPUT}\n  ❌  .devflow.yaml — found but invalid (run /devflow config)"
+    ISSUES=$((ISSUES + 1))
+  fi
+fi
+```
+
+### Step 3 — Config field checks (skip if config missing)
+
+If `$CONFIG_MISSING = false`:
+
+```bash
+BASE_BRANCH=$(grep -E '^base_branch:' .devflow.yaml | awk '{print $2}' | tr -d '"' | tr -d "'" || true)
+if [ -n "$BASE_BRANCH" ]; then
+  OUTPUT="${OUTPUT}\n  ✅  base_branch: ${BASE_BRANCH}"
+else
+  OUTPUT="${OUTPUT}\n  ❌  base_branch: not set"
+  ISSUES=$((ISSUES + 1))
+fi
+
+CMD_TEST=$(grep -E '^  test:' .devflow.yaml | awk '{$1=""; print $0}' | xargs || true)
+if [ -n "$CMD_TEST" ]; then
+  OUTPUT="${OUTPUT}\n  ✅  commands.test: ${CMD_TEST}"
+else
+  OUTPUT="${OUTPUT}\n  ❌  commands.test: not set (required)"
+  ISSUES=$((ISSUES + 1))
+fi
+
+CMD_LINT=$(grep -E '^  lint:' .devflow.yaml | awk '{$1=""; print $0}' | xargs || true)
+if [ -n "$CMD_LINT" ]; then
+  OUTPUT="${OUTPUT}\n  ✅  commands.lint: ${CMD_LINT}"
+else
+  OUTPUT="${OUTPUT}\n  ❌  commands.lint: not set (optional)"
+fi
+```
+
+If `$CONFIG_MISSING = true`, add ❌ lines for base_branch and commands.test and increment ISSUES for each.
+
+### Step 4 — Tool availability checks
+
+```bash
+for tool in git gh python3; do
+  if command -v "$tool" &>/dev/null; then
+    OUTPUT="${OUTPUT}\n  ✅  ${tool} — available"
+  else
+    OUTPUT="${OUTPUT}\n  ❌  ${tool} — not found (required)"
+    ISSUES=$((ISSUES + 1))
+  fi
+done
+
+if command -v jq &>/dev/null; then
+  OUTPUT="${OUTPUT}\n  ✅  jq — available"
+else
+  OUTPUT="${OUTPUT}\n  ❌  jq — not found (required by scripts)"
+  ISSUES=$((ISSUES + 1))
+fi
+```
+
+### Step 5 — Hook scripts executable
+
+```bash
+if [ -x "${CLAUDE_PLUGIN_ROOT}/scripts/guard-base-branch.sh" ]; then
+  OUTPUT="${OUTPUT}\n  ✅  Hook scripts — executable"
+else
+  OUTPUT="${OUTPUT}\n  ❌  Hook scripts — not executable (run: chmod +x ${CLAUDE_PLUGIN_ROOT}/scripts/*.sh)"
+  ISSUES=$((ISSUES + 1))
+fi
+```
+
+### Step 6 — Specialist discovery
+
+```bash
+SPECIALISTS=$("${CLAUDE_PLUGIN_ROOT}/scripts/discover-specialists.sh" . 2>/dev/null || true)
+if [ -n "$SPECIALISTS" ]; then
+  SPEC_COUNT=$(echo "$SPECIALISTS" | grep -c '|' || echo 1)
+  OUTPUT="${OUTPUT}\n  ✅  Specialists found: ${SPEC_COUNT}"
+else
+  OUTPUT="${OUTPUT}\n  ❌  Specialists: none found (fallback will be used)"
+fi
+```
+
+### Step 7 — Telemetry dir writable
+
+```bash
+TELEMETRY_DIR=".devflow/runs/"
+if [ -f ".devflow.yaml" ]; then
+  CONFIGURED=$(grep -E '^\s*path:' .devflow.yaml | awk '{print $2}' | tr -d '"' | tr -d "'" || true)
+  [ -n "$CONFIGURED" ] && TELEMETRY_DIR="$CONFIGURED"
+fi
+
+mkdir -p "$TELEMETRY_DIR" 2>/dev/null || true
+if [ -w "$TELEMETRY_DIR" ]; then
+  OUTPUT="${OUTPUT}\n  ✅  Telemetry dir: ${TELEMETRY_DIR} (writable)"
+else
+  OUTPUT="${OUTPUT}\n  ❌  Telemetry dir: ${TELEMETRY_DIR} (not writable)"
+  ISSUES=$((ISSUES + 1))
+fi
+```
+
+### Step 8 — Print results
+
+Print the header, all checklist lines, footer, and summary:
+
+```
+DevFlow doctor
+──────────────────────────────────────────
+<OUTPUT lines>
+──────────────────────────────────────────
+```
+
+Then:
+- If `$ISSUES = 0`: `All checks passed.`
+- If `$ISSUES > 0`: `$ISSUES issue(s) found. Run /devflow init to fix setup issues.`
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, `specialist`, or `abort`, respond:
+If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, or `doctor`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
@@ -886,4 +1027,5 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow logs [run-id]
   /devflow config
   /devflow specialist add
+  /devflow doctor
 ```
