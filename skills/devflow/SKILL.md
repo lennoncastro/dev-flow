@@ -557,24 +557,42 @@ If no file found: "No runs found in `$TELEMETRY_DIR`."
 
 Read all lines from the JSONL. For each event, extract `ts`, `event`, `phase`, `status`, and any extra fields.
 
+After reading all events, determine which phases from the expected sequence were logged:
+
+```
+EXPECTED_PHASES="plan discover execute test lint review pr"
+```
+
+For each phase in `$EXPECTED_PHASES`:
+- If it appears in the JSONL with a `phase` event → show it normally with ✅ or ❌
+- If it does NOT appear but comes after the last logged phase AND before `stop`/`fail` → show it as `⚠ not logged`
+- If it comes before the last logged phase and is missing → also show it as `⚠ not logged`
+
+Skip the `⚠ not logged` inference only if the run has a `stop` event AND all expected phases are present.
+
 Display as a timeline:
 
 ```
 Run: <run-id>
 ─────────────────────────────────────────────────────────────
   <time>  start      task="<task>"
-  <time>  phase      plan          ✅  <duration>
-  <time>  phase      discover      ✅  <duration>  specialists=<n>
-  <time>  phase      execute       ✅  <duration>
-  <time>  phase      test          ✅  <duration>
-  <time>  phase      lint          ✅  <duration>
-  <time>  phase      review        ✅  <duration>
-  <time>  phase      pr            ✅  <duration>  url=<pr-url>
-  <time>  stop       status=success  total=<total-duration>
+  <time>  phase      plan       ✅  <duration>
+  <time>  phase      discover   ✅  <duration>  specialists=<n>
+  ??:??   phase      execute    ⚠  not logged
+  ??:??   phase      test       ⚠  not logged
+  ??:??   phase      lint       ⚠  not logged
+  ??:??   phase      review     ⚠  not logged
+  ??:??   phase      pr         ⚠  not logged
+  (no stop event — run may still be in progress or telemetry incomplete)
 ─────────────────────────────────────────────────────────────
 ```
 
 For `fail` events use ❌ instead of ✅. Calculate duration between consecutive timestamps. Show total elapsed from start to stop/fail.
+
+If any `⚠ not logged` phases exist, append after the separator:
+```
+⚠  Some phases were not logged. This may indicate the motor skipped telemetry calls.
+```
 
 If `$MULTIPLE > 1` and no run-id was specified, append: "(showing latest — use /devflow logs <run-id> to see others)"
 
