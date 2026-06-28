@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] <task> | /devflow status | /devflow config [get <key> | set <key> <value>]
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -15,6 +15,18 @@ SUBARGS=$(echo "$ARGUMENTS" | cut -d' ' -f2-)
 ## Subcommand: start
 
 Triggered when `$SUBCMD = start`. Task description is `$SUBARGS`.
+
+**Execution mode: fully autonomous. Run every step to completion without pausing, asking for confirmation, or stopping between steps. Only stop for: config validation failure (Step 1), worktree creation failure (Step 5), or test gate failure when require_tests_pass is true.**
+
+First, parse flags from `$SUBARGS`:
+
+```bash
+DRY_RUN=false
+if echo "$SUBARGS" | grep -q -- '--dry-run'; then
+  DRY_RUN=true
+  SUBARGS=$(echo "$SUBARGS" | sed 's/--dry-run//g' | xargs)
+fi
+```
 
 Execute the DevFlow workflow for the task described in `$SUBARGS`.
 
@@ -46,6 +58,8 @@ GATE_LINT=$(yq e '.gates.require_lint_pass // "true"' .devflow.yaml 2>/dev/null 
 DEPLOY_BEFORE_PR=$(yq e '.gates.deploy_before_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
 AUTO_PR=$(yq e '.gates.auto_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
 FALLBACK_MODE=$(yq e '.fallback.mode // "generic"' .devflow.yaml 2>/dev/null || echo "generic")
+MAX_TOKENS=$(yq e '.limits.max_tokens_per_run // "0"' .devflow.yaml 2>/dev/null || echo "0")
+ON_LIMIT=$(yq e '.limits.on_limit // "confirm"' .devflow.yaml 2>/dev/null || echo "confirm")
 ```
 
 If `$SUBARGS` contains `--auto-pr`, set `AUTO_PR=true` and strip the flag from the task description:
@@ -72,6 +86,10 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 ```
 
 ### Step 5 — Create worktree
+
+If `$DRY_RUN=true`, skip worktree creation and set `WORKTREE="(dry run — no worktree created)"`. Continue to Step 6.
+
+Otherwise:
 
 ```bash
 WORKTREE=$("${CLAUDE_PLUGIN_ROOT}/scripts/worktree-create.sh" "$TASK_SLUG" "$BASE_BRANCH" "$REPO_ROOT")
@@ -106,6 +124,35 @@ If `$SPECIALISTS` is empty:
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=discover" "specialists_found=$(echo "$SPECIALISTS" | grep -c '|' || echo 0)"
 ```
 
+If `$DRY_RUN=true`, stop here and display:
+
+```
+Dry run complete — no changes made.
+
+  Task:        <SUBARGS>
+  Run ID:      <RUN_ID> (dry run)
+  Base branch: <BASE_BRANCH>
+  Worktree:    (not created)
+
+  Plan:
+  <plan produced in Step 6>
+
+  Specialists:
+  <list of scope → agent file, or "none found — would use fallback: <FALLBACK_MODE>">
+
+  Would execute:
+    fan-out: <number of specialists> agents (max <MAX_AGENTS>)
+    test:    <CMD_TEST>
+    lint:    <CMD_LINT or "(skipped — not configured)">
+    build:   <CMD_BUILD or "(skipped)">
+    deploy:  <CMD_DEPLOY or "(skipped)">
+    pr:      auto_pr=<AUTO_PR>
+
+To run for real: /devflow start <SUBARGS>
+```
+
+Then stop. Do not proceed to Step 8.
+
 ### Step 8 — Fan-out execution
 
 Spawn specialist agents to implement the plan. Respect `$MAX_AGENTS`. Each specialist works exclusively in its scope within `$WORKTREE`. Specialists must not open PRs, manage git, or run tests.
@@ -118,6 +165,23 @@ Handle `$ON_PARTIAL`:
 ```bash
 "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=execute" "status=done"
 ```
+
+### Step 8b — Cost gate check
+
+If `$MAX_TOKENS > 0`:
+
+```bash
+N_SPECIALISTS=$(echo "$SPECIALISTS" | grep -c '|' || echo 1)
+ESTIMATED_TOKENS=$((5000 + N_SPECIALISTS * 20000 + 3000))
+```
+
+If `ESTIMATED_TOKENS > MAX_TOKENS`:
+- If `ON_LIMIT=abort`: log and stop:
+  ```bash
+  "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=cost_gate" "reason=token_limit_exceeded" "estimated=$ESTIMATED_TOKENS" "limit=$MAX_TOKENS"
+  ```
+  Report: "Cost gate: estimated ~`$ESTIMATED_TOKENS` tokens exceeds limit of `$MAX_TOKENS`. Run aborted."
+- If `ON_LIMIT=confirm`: ask user: "Estimated token usage (~`$ESTIMATED_TOKENS`) exceeds configured limit (`$MAX_TOKENS`). Continue? (y/n)" — abort if n, continue if y.
 
 ### Step 9 — Test gate
 
@@ -193,6 +257,71 @@ Report the PR URL and a summary of phases completed.
 
 ---
 
+## Subcommand: retry
+
+Triggered when `$SUBCMD = retry`. Optional run ID in `$SUBARGS`.
+
+### Step 1 — Find the run
+
+```bash
+TELEMETRY_DIR=$(yq e '.telemetry.path // ".devflow/runs/"' .devflow.yaml 2>/dev/null || echo ".devflow/runs/")
+if [ -n "$SUBARGS" ] && [ "$SUBARGS" != "$SUBCMD" ]; then
+  RUN_FILE="${TELEMETRY_DIR}/${SUBARGS}.jsonl"
+else
+  RUN_FILE=$(ls -t "${TELEMETRY_DIR}"*.jsonl 2>/dev/null | head -1)
+fi
+```
+
+If no file found: "No run found. Use /devflow status to list runs."
+
+### Step 2 — Determine failed phase
+
+Read the JSONL and find the last `fail` event or the last `phase` event before `stop`:
+
+```bash
+FAILED_PHASE=$(grep '"event":"fail"' "$RUN_FILE" | tail -1 | jq -r '.phase // "unknown"')
+RUN_ID=$(basename "$RUN_FILE" .jsonl)
+TASK=$(grep '"event":"start"' "$RUN_FILE" | head -1 | jq -r '.task // ""' | sed 's/task=//')
+```
+
+Show: "Run `$RUN_ID` failed at phase `$FAILED_PHASE`. Retrying from `$FAILED_PHASE`..."
+
+Log the retry event:
+```bash
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" retry "$RUN_ID" "from_phase=$FAILED_PHASE"
+```
+
+### Step 3 — Read config and restore state
+
+Re-read `.devflow.yaml` (same as start Step 2). Restore:
+```bash
+TASK_SLUG=$(echo "$RUN_ID" | sed 's/-[0-9]*$//')
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE_PATH="${REPO_ROOT}/.devflow/worktrees/${TASK_SLUG}"
+```
+
+### Step 4 — Restore or recreate worktree
+
+If `$WORKTREE_PATH` exists: use it.
+Otherwise: recreate with `scripts/worktree-create.sh "$TASK_SLUG" "$BASE_BRANCH" "$REPO_ROOT"`.
+
+### Step 5 — Resume from failed phase
+
+Check which phases already passed by scanning the JSONL for `"status":"passed"` events. Skip those phases. Resume the start workflow from `$FAILED_PHASE`.
+
+Phases that can be retried: `execute`, `test`, `lint`, `review`, `pr`.
+
+If `$FAILED_PHASE` is `plan` or earlier: restart from Step 6 of start.
+If `$FAILED_PHASE` is `execute`: restart from Step 8.
+If `$FAILED_PHASE` is `test`: restart from Step 9.
+If `$FAILED_PHASE` is `lint`: restart from Step 10.
+If `$FAILED_PHASE` is `review`: restart from Step 12.
+If `$FAILED_PHASE` is `pr`: restart from Step 14.
+
+Continue the start workflow normally from the resumed phase through cleanup.
+
+---
+
 ## Subcommand: status
 
 Triggered when `$SUBCMD = status`.
@@ -221,6 +350,51 @@ for file in "$TELEMETRY_DIR"/*.jsonl; do
   echo "Run: ${run_id} | Last event: ${event} | Status: ${status} | At: ${ts}"
 done
 ```
+
+---
+
+## Subcommand: logs
+
+Triggered when `$SUBCMD = logs`. Optional run ID in `$SUBARGS`.
+
+### Step 1 — Find the JSONL
+
+```bash
+TELEMETRY_DIR=$(yq e '.telemetry.path // ".devflow/runs/"' .devflow.yaml 2>/dev/null || echo ".devflow/runs/")
+if [ -n "$SUBARGS" ] && [ "$SUBARGS" != "$SUBCMD" ]; then
+  RUN_FILE="${TELEMETRY_DIR}/${SUBARGS}.jsonl"
+else
+  RUN_FILE=$(ls -t "${TELEMETRY_DIR}"*.jsonl 2>/dev/null | head -1)
+  MULTIPLE=$(ls "${TELEMETRY_DIR}"*.jsonl 2>/dev/null | wc -l)
+fi
+```
+
+If no file found: "No runs found in `$TELEMETRY_DIR`."
+
+### Step 2 — Parse and display timeline
+
+Read all lines from the JSONL. For each event, extract `ts`, `event`, `phase`, `status`, and any extra fields.
+
+Display as a timeline:
+
+```
+Run: <run-id>
+─────────────────────────────────────────────────────────────
+  <time>  start      task="<task>"
+  <time>  phase      plan          ✅  <duration>
+  <time>  phase      discover      ✅  <duration>  specialists=<n>
+  <time>  phase      execute       ✅  <duration>
+  <time>  phase      test          ✅  <duration>
+  <time>  phase      lint          ✅  <duration>
+  <time>  phase      review        ✅  <duration>
+  <time>  phase      pr            ✅  <duration>  url=<pr-url>
+  <time>  stop       status=success  total=<total-duration>
+─────────────────────────────────────────────────────────────
+```
+
+For `fail` events use ❌ instead of ✅. Calculate duration between consecutive timestamps. Show total elapsed from start to stop/fail.
+
+If `$MULTIPLE > 1` and no run-id was specified, append: "(showing latest — use /devflow logs <run-id> to see others)"
 
 ---
 
@@ -561,16 +735,68 @@ Then ask: "Anything else to change? (number or 'done')" — loop back to Step 3 
 
 ---
 
+## Subcommand: specialist
+
+Triggered when `$SUBCMD = specialist`.
+
+If `$SUBARGS` is not `add`, respond: "Usage: /devflow specialist add"
+
+### Interactive wizard — /devflow specialist add
+
+Ask each question and wait for the user's answer before proceeding:
+
+**Step 1:** "Name for this specialist? (e.g. backend, frontend, mobile)"
+→ Store as `SPEC_NAME`
+
+**Step 2:** "Which directory should this specialist cover? (path relative to repo root, or '.' for root)"
+→ Store as `SPEC_DIR`
+
+**Step 3:** "Describe what this specialist knows (e.g. 'Node.js/Express API, Jest tests, TypeScript strict')"
+→ Store as `SPEC_DESC`
+
+**Step 4:** "Any libraries or patterns to always follow? (Enter to skip)"
+→ Store as `SPEC_FOLLOW` (empty = skip)
+
+**Step 5:** "Any libraries or patterns to avoid? (Enter to skip)"
+→ Store as `SPEC_AVOID` (empty = skip)
+
+### Generate the specialist file
+
+Target path: `<SPEC_DIR>/.claude/agents/<SPEC_NAME>.md`
+(If `SPEC_DIR = "."`, path is `.claude/agents/<SPEC_NAME>.md`)
+
+Create the directory if needed. Write the file:
+
+```markdown
+---
+name: <SPEC_NAME>
+description: <SPEC_DESC>
+---
+
+<SPEC_DESC>.
+<If SPEC_FOLLOW non-empty: "Always follow: <SPEC_FOLLOW>.">
+<If SPEC_AVOID non-empty: "Avoid: <SPEC_AVOID>.">
+Write tests consistent with the existing setup.
+No new dependencies without checking existing manifests first.
+```
+
+Confirm: "Created `<path>` — covers `<SPEC_DIR>`"
+
+Tip: the motor will discover this specialist automatically for tasks touching files under `<SPEC_DIR>`. No declaration needed.
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `status`, or `config`, respond:
+If `$SUBCMD` is not `init`, `start`, `status`, `retry`, `logs`, `config`, or `specialist`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow init
-  /devflow start [--auto-pr] <task description>
+  /devflow start [--auto-pr] [--dry-run] <task description>
+  /devflow retry [run-id]
   /devflow status
+  /devflow logs [run-id]
   /devflow config
-  /devflow config get <key>
-  /devflow config set <key> <value>
+  /devflow specialist add
 ```
