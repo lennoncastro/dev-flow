@@ -67,6 +67,30 @@ jobs:
           set -e
           [ "$EXIT" -eq 1 ] || { echo "Expected exit 1 from discover-specialists for fallback fixture, got $EXIT"; exit 1; }
 
+  lint-skill:
+    name: Lint SKILL.md
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate SKILL.md structure
+        run: bash scripts/lint-skill.sh
+
+  check-scripts:
+    name: Check scripts executable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: All .sh scripts must be executable
+        run: |
+          FAIL=0
+          for f in scripts/*.sh; do
+            if [ ! -x "$f" ]; then
+              echo "NOT EXECUTABLE: $f"
+              FAIL=1
+            fi
+          done
+          exit $FAIL
+
   validate-schema-negative:
     name: Schema validation — negative tests
     runs-on: ubuntu-latest
