@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status [--watch] | /devflow logs [run-id] | /devflow open [run-id] | /devflow history | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -58,9 +58,11 @@ GATE_LINT=$(yq e '.gates.require_lint_pass // "true"' .devflow.yaml 2>/dev/null 
 DEPLOY_BEFORE_PR=$(yq e '.gates.deploy_before_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
 AUTO_PR=$(yq e '.gates.auto_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
 DRAFT_PR=$(yq e '.gates.draft_pr // "true"' .devflow.yaml 2>/dev/null || echo "true")
+REQUIRE_DIFF_REVIEW=$(yq e '.gates.require_diff_review // "true"' .devflow.yaml 2>/dev/null || echo "true")
 FALLBACK_MODE=$(yq e '.fallback.mode // "generic"' .devflow.yaml 2>/dev/null || echo "generic")
 MAX_TOKENS=$(yq e '.limits.max_tokens_per_run // "0"' .devflow.yaml 2>/dev/null || echo "0")
 ON_LIMIT=$(yq e '.limits.on_limit // "confirm"' .devflow.yaml 2>/dev/null || echo "confirm")
+RETRY_LIMIT=$(yq e '.limits.retry_limit // "0"' .devflow.yaml 2>/dev/null || echo "0")
 ```
 
 If `$SUBARGS` contains `--auto-pr`, set `AUTO_PR=true` and strip the flag from the task description:
@@ -189,34 +191,68 @@ If `ESTIMATED_TOKENS > MAX_TOKENS`:
 
 ### Step 9 — Test gate
 
-If `$CMD_TEST` is set, run it inside `$WORKTREE`. If it fails and `$GATE_TESTS=true`:
+If `$CMD_TEST` is set, run it with retry support:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=test" "reason=tests_failed"
-if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} failed at test gate ❌"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Failed at test gate ❌" with title "DevFlow"'; fi; printf '\a'
+TEST_ATTEMPT=0
+TEST_PASSED=false
+while [ "$TEST_ATTEMPT" -le "$RETRY_LIMIT" ]; do
+  TEST_ATTEMPT=$((TEST_ATTEMPT + 1))
+  [ "$TEST_ATTEMPT" -gt 1 ] && echo "DevFlow: test retry ${TEST_ATTEMPT}/${RETRY_LIMIT}..."
+  if (cd "$WORKTREE" && eval "$CMD_TEST"); then
+    TEST_PASSED=true
+    break
+  fi
+  [ "$TEST_ATTEMPT" -gt "$RETRY_LIMIT" ] && break
+done
 ```
 
-Stop and report failure.
+If `$TEST_PASSED=false`:
+- If `$GATE_TESTS=true`: **Run now**, then stop and report failure:
+  ```bash
+  "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=test" "reason=tests_failed" "attempts=${TEST_ATTEMPT}"
+  if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} failed at test gate ❌"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Failed at test gate ❌" with title "DevFlow"'; fi; printf '\a'
+  ```
+- If `$GATE_TESTS=false`: warn "tests failed after ${TEST_ATTEMPT} attempt(s) — continuing (gate disabled)" and proceed.
+
+If `$TEST_PASSED=true` and `$TEST_ATTEMPT > 1`: note "tests passed on attempt ${TEST_ATTEMPT}".
 
 **Run now before proceeding:**
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=test" "status=passed"
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=test" "status=passed" "attempts=${TEST_ATTEMPT}"
 ```
 
 ### Step 10 — Lint gate
 
-If `$CMD_LINT` is set, run it inside `$WORKTREE`. If it fails and `$GATE_LINT=true`:
+If `$CMD_LINT` is set, run it with retry support:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=lint" "reason=lint_failed"
-if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} failed at lint gate ❌"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Failed at lint gate ❌" with title "DevFlow"'; fi; printf '\a'
+LINT_ATTEMPT=0
+LINT_PASSED=false
+while [ "$LINT_ATTEMPT" -le "$RETRY_LIMIT" ]; do
+  LINT_ATTEMPT=$((LINT_ATTEMPT + 1))
+  [ "$LINT_ATTEMPT" -gt 1 ] && echo "DevFlow: lint retry ${LINT_ATTEMPT}/${RETRY_LIMIT}..."
+  if (cd "$WORKTREE" && eval "$CMD_LINT"); then
+    LINT_PASSED=true
+    break
+  fi
+  [ "$LINT_ATTEMPT" -gt "$RETRY_LIMIT" ] && break
+done
 ```
 
-Stop and report failure.
+If `$LINT_PASSED=false`:
+- If `$GATE_LINT=true`: **Run now**, then stop and report failure:
+  ```bash
+  "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=lint" "reason=lint_failed" "attempts=${LINT_ATTEMPT}"
+  if command -v notify-send &>/dev/null; then notify-send "DevFlow" "Run ${RUN_ID} failed at lint gate ❌"; elif command -v osascript &>/dev/null; then osascript -e 'display notification "Failed at lint gate ❌" with title "DevFlow"'; fi; printf '\a'
+  ```
+- If `$GATE_LINT=false`: warn "lint failed after ${LINT_ATTEMPT} attempt(s) — continuing (gate disabled)" and proceed.
+
+If `$LINT_PASSED=true` and `$LINT_ATTEMPT > 1`: note "lint passed on attempt ${LINT_ATTEMPT}".
 
 **Run now before proceeding:**
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=lint" "status=passed"
+"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" phase "$RUN_ID" "phase=lint" "status=passed" "attempts=${LINT_ATTEMPT}"
 ```
 
 ### Step 11 — Build (optional)
@@ -225,7 +261,34 @@ If `$CMD_BUILD` is set, run it inside `$WORKTREE`.
 
 ### Step 12 — Review
 
-Self-review all changes in `$WORKTREE`: correctness vs plan, no hardcoded values, no regressions, adequate test coverage. If issues found, return to Step 8 for targeted re-execution.
+If `$REQUIRE_DIFF_REVIEW=true`, show the diff summary first:
+
+```bash
+echo "DevFlow: changes in worktree —"
+git -C "$WORKTREE" diff --stat HEAD 2>/dev/null || git -C "$WORKTREE" diff --stat 2>/dev/null || echo "  (no diff available)"
+echo "Files changed:"
+git -C "$WORKTREE" status --short 2>/dev/null | head -20
+CHANGED_FILES=$(git -C "$WORKTREE" diff --name-only HEAD 2>/dev/null | wc -l || echo "?")
+CHANGED_LINES=$(git -C "$WORKTREE" diff --stat HEAD 2>/dev/null | tail -1 || echo "")
+echo "Summary: ${CHANGED_FILES} file(s) changed — ${CHANGED_LINES}"
+```
+
+Self-review all changes in `$WORKTREE`: correctness vs plan, no hardcoded values, no regressions, adequate test coverage.
+
+If `$REQUIRE_DIFF_REVIEW=true`, ask:
+
+```
+Review looks good? (y/N/redo)
+```
+
+- `y` → proceed to Step 13
+- `redo` → return to Step 8 for re-execution
+- `N` or anything else → log fail and stop:
+  ```bash
+  "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=review" "reason=user_rejected"
+  ```
+
+If `$REQUIRE_DIFF_REVIEW=false`, proceed automatically.
 
 **Run now before proceeding:**
 ```bash
@@ -730,6 +793,8 @@ fallback:
   mode: generic
 gates:
   draft_pr: true
+limits:
+  retry_limit: 2
 telemetry:
   enabled: true
   path: .devflow/runs/
@@ -1554,9 +1619,84 @@ gh pr view "$BRANCH" --web 2>/dev/null || echo "No PR found for branch ${BRANCH}
 
 ---
 
+## Subcommand: history
+
+Triggered when `$SUBCMD = history`. Optional flags in `$SUBARGS`.
+
+Show all DevFlow runs with filtering and richer output than `status`.
+
+### Step 1 — Parse flags
+
+```bash
+FILTER_STATUS=""
+FILTER_SINCE=""
+FILTER_TASK=""
+echo "$SUBARGS" | grep -q -- '--status=' && FILTER_STATUS=$(echo "$SUBARGS" | grep -o -- '--status=[^ ]*' | cut -d= -f2)
+echo "$SUBARGS" | grep -q -- '--since=' && FILTER_SINCE=$(echo "$SUBARGS" | grep -o -- '--since=[^ ]*' | cut -d= -f2)
+echo "$SUBARGS" | grep -q -- '--task=' && FILTER_TASK=$(echo "$SUBARGS" | grep -o -- '--task=[^ ]*' | cut -d= -f2)
+```
+
+### Step 2 — Find telemetry dir
+
+```bash
+TELEMETRY_DIR=".devflow/runs"
+if [ -f ".devflow.yaml" ]; then
+  CONFIGURED=$(grep -E '^  path:' .devflow.yaml | awk '{print $2}' | tr -d '"' | tr -d "'" || true)
+  [ -n "$CONFIGURED" ] && TELEMETRY_DIR="$CONFIGURED"
+fi
+```
+
+If no `.jsonl` files found: "No DevFlow runs found in `$TELEMETRY_DIR`." and stop.
+
+### Step 3 — Read and filter all runs
+
+For each `.jsonl` in `$TELEMETRY_DIR`:
+
+```bash
+for file in "$TELEMETRY_DIR"/*.jsonl; do
+  run_id=$(basename "$file" .jsonl)
+  task=$(grep '"event":"start"' "$file" | head -1 | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("task",""))' 2>/dev/null | sed 's/task=//' || true)
+  start_ts=$(grep '"event":"start"' "$file" | head -1 | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ts",""))' 2>/dev/null || true)
+  last_line=$(tail -1 "$file")
+  last_event=$(echo "$last_line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event",""))' 2>/dev/null || true)
+  last_status=$(echo "$last_line" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null || true)
+  phases_count=$(grep '"event":"phase"' "$file" 2>/dev/null | wc -l | tr -d ' ' || echo 0)
+done
+```
+
+Apply filters:
+- `$FILTER_STATUS=failed` → skip if `$last_event != "fail"`
+- `$FILTER_STATUS=success` → skip if `$last_event != "stop"` or `$last_status != "success"`
+- `$FILTER_STATUS=running` → skip if `$last_event` is `stop` or `fail`
+- `$FILTER_TASK` non-empty → skip if `$task` does not contain `$FILTER_TASK` (case-insensitive)
+- `$FILTER_SINCE` non-empty → parse `7d`/`24h`/`30m` into seconds, skip if `$start_ts` is older than that threshold
+
+### Step 4 — Display
+
+```
+DevFlow history  (showing <N> runs)
+──────────────────────────────────────────────────────────────────
+  RUN ID                               TASK                        STATUS      PHASES  STARTED
+  <run_id truncated to 40chars>        <task truncated to 28chars> <icon>      <N>/8   <YYYY-MM-DD HH:MM>
+──────────────────────────────────────────────────────────────────
+<N> runs found. Use /devflow logs <run-id> for details.
+Filters: --status=<success|failed|running> --since=<7d|24h|30m> --task=<keyword>
+```
+
+Status icons:
+- `✅ done` → last_event=`stop` and status=`success`
+- `❌ failed` → last_event=`fail`
+- `⏳ running` → no `stop` or `fail` event yet
+
+Phases shown as `<phases_count>/8` (expected 8: plan, discover, execute, test, lint, review, pr, stop).
+
+If no runs match after filtering: "No runs found matching filters."
+
+---
+
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, or `open`, respond:
+If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, `update`, `open`, or `history`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
@@ -1569,6 +1709,7 @@ DevFlow: unknown subcommand '$SUBCMD'. Usage:
   /devflow status [--watch]
   /devflow logs [run-id]
   /devflow open [run-id]
+  /devflow history [--status=<success|failed|running>] [--since=<7d|24h>] [--task=<keyword>]
   /devflow config
   /devflow specialist add
   /devflow doctor
