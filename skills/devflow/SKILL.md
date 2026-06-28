@@ -1,6 +1,6 @@
 ---
 name: devflow
-description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id]
+description: DevFlow motor — AI-assisted development workflow. Usage: /devflow init | /devflow start [--auto-pr] [--dry-run] <task> | /devflow plan <task> | /devflow retry [run-id] | /devflow status | /devflow logs [run-id] | /devflow config | /devflow specialist add | /devflow doctor | /devflow clean | /devflow rollback [run-id] | /devflow update
 ---
 
 Parse the first word of $ARGUMENTS as the subcommand. Everything after is the subcommand's arguments.
@@ -1221,210 +1221,95 @@ Then:
 
 ---
 
-## Subcommand: rollback
+## Subcommand: update
 
-Triggered when `$SUBCMD = rollback`. Optional run ID in `$SUBARGS`.
+Triggered when `$SUBCMD = update`.
 
-Unlike `abort` (cancels in-progress runs), `rollback` undoes a **completed** run — deletes the remote branch (if not merged) and removes the worktree. Does not revert a merged PR.
+Syncs the active plugin cache from the local source repo.
 
-### Step 1 — Find the run
+### Step 1 — Find cache root
 
 ```bash
-TELEMETRY_DIR=$(grep -A1 'path:' .devflow.yaml 2>/dev/null | tail -1 | awk '{print $2}' || echo ".devflow/runs/")
-if [ -n "$SUBARGS" ] && [ "$SUBARGS" != "$SUBCMD" ]; then
-  RUN_FILE="${TELEMETRY_DIR}/${SUBARGS}.jsonl"
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ]; then
+  CACHE_ROOT=$(dirname "${CLAUDE_PLUGIN_ROOT}")
 else
-  RUN_FILE=$(ls -t "${TELEMETRY_DIR}"*.jsonl 2>/dev/null | head -1)
+  CACHE_ROOT=$(ls -d ~/.claude/plugins/cache/lennoncastro/devflow/*/ 2>/dev/null | tail -1)
 fi
 ```
 
-If not found: "No run found. Use /devflow status to list runs." and stop.
+If not found: "Plugin cache not found. Is devflow installed? Run: claude plugin install lennoncastro/devflow" and stop.
 
-### Step 2 — Check run state
-
-```bash
-RUN_ID=$(basename "$RUN_FILE" .jsonl)
-LAST_EVENT=$(tail -1 "$RUN_FILE" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event",""))' 2>/dev/null || true)
-```
-
-- If `$LAST_EVENT` is not `stop`: "Run `$RUN_ID` has not completed (last event: `$LAST_EVENT`). Use /devflow abort to cancel an in-progress run." and stop.
-- If `$LAST_EVENT` is `rollback`: "Run `$RUN_ID` was already rolled back." and stop.
-
-### Step 3 — Check if PR was merged
+### Step 2 — Find source root
 
 ```bash
-TASK_SLUG=$(echo "$RUN_ID" | sed 's/-[0-9]*$//')
-BRANCH="devflow/${TASK_SLUG}"
-PR_MERGED=false
-PR_NUMBER=$(gh pr list --head "$BRANCH" --state merged --json number -q '.[0].number' 2>/dev/null || true)
-[ -n "$PR_NUMBER" ] && PR_MERGED=true
-
-TASK=$(grep '"event":"start"' "$RUN_FILE" | head -1 | python3 -c 'import json,sys; print(json.load(sys.stdin).get("task",""))' 2>/dev/null | sed 's/task=//' || true)
-REPO_ROOT=$(git rev-parse --show-toplevel)
-WORKTREE_PATH="${REPO_ROOT}/.devflow/worktrees/${TASK_SLUG}"
-WORKTREE_INFO="$WORKTREE_PATH"
-[ ! -d "$WORKTREE_PATH" ] && WORKTREE_INFO="already removed"
-BRANCH_INFO="not merged"
-[ "$PR_MERGED" = true ] && BRANCH_INFO="merged into main via PR #${PR_NUMBER}"
+SOURCE_ROOT=""
+[ -n "${DEVFLOW_SOURCE:-}" ] && SOURCE_ROOT="$DEVFLOW_SOURCE"
+[ -z "$SOURCE_ROOT" ] && [ -d "$HOME/development/projects/ia/devflow/.git" ] && SOURCE_ROOT="$HOME/development/projects/ia/devflow"
 ```
 
-### Step 4 — Confirm
+If `$SOURCE_ROOT` is still empty: "Source repo not found. Set DEVFLOW_SOURCE=/path/to/devflow and retry." and stop.
+
+### Step 3 — Pull latest source
+
+```bash
+git -C "$SOURCE_ROOT" pull origin main 2>&1 || true
+```
+
+Show the git output. If pull fails, show a warning but continue using the current source state.
+
+### Step 4 — Show diff summary
+
+```bash
+CACHED_SKILL="${CACHE_ROOT}/skills/devflow/SKILL.md"
+SOURCE_SKILL="${SOURCE_ROOT}/skills/devflow/SKILL.md"
+DIFF_LINES=$(diff "$CACHED_SKILL" "$SOURCE_SKILL" 2>/dev/null | grep -c '^[<>]' || echo 0)
+```
 
 Show:
 
 ```
-Rollback run <RUN_ID>?
-  Task:      <TASK>
-  Branch:    devflow/<TASK_SLUG>  (<BRANCH_INFO>)
-  Worktree:  <WORKTREE_INFO>
-
-This will: delete remote branch (if not merged), remove worktree, mark as rolled back.
+DevFlow update
+  Source: <SOURCE_ROOT>
+  Cache:  <CACHE_ROOT>
+  Changes: <DIFF_LINES> lines differ
 ```
 
-If `$PR_MERGED=true`, also show:
+If `$DIFF_LINES = 0`: "Cache is already up to date." and stop.
+
+### Step 5 — Confirm and sync
 
 ```
-⚠  PR #<PR_NUMBER> was merged — branch deletion only, code changes remain in main.
+Files to sync:
+  skills/devflow/SKILL.md
+  scripts/*.sh
+  hooks/hooks.json
+  agents/generic.md
+
+Sync now? (y/N)
 ```
 
-Then: `Proceed? (y/N)` — wait for confirmation. If not `y`/`yes`: "Rollback cancelled." and stop.
+Wait for user confirmation. If not `y` or `yes`: stop silently.
 
-### Step 5 — Execute rollback
-
-Delete remote branch if not merged:
+On confirmation:
 
 ```bash
-if [ "$PR_MERGED" = false ]; then
-  git push origin --delete "$BRANCH" 2>/dev/null || true
-fi
-```
-
-Remove worktree:
-
-```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/worktree-cleanup.sh" "$TASK_SLUG"
-```
-
-Log:
-
-```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=rollback" "reason=user_rollback" "pr_merged=${PR_MERGED}"
+cp -r "${SOURCE_ROOT}/skills/" "${CACHE_ROOT}/"
+cp -r "${SOURCE_ROOT}/scripts/" "${CACHE_ROOT}/"
+cp -r "${SOURCE_ROOT}/hooks/" "${CACHE_ROOT}/"
+cp -r "${SOURCE_ROOT}/agents/" "${CACHE_ROOT}/" 2>/dev/null || true
 ```
 
 ### Step 6 — Report
 
 ```
-Run <RUN_ID> rolled back.
-  Branch:   devflow/<TASK_SLUG> deleted  (or "already merged — not deleted")
-  Worktree: removed  (or "not found — nothing to remove")
-```
-
----
-
-## Subcommand: clean
-
-Triggered when `$SUBCMD = clean`.
-
-Remove orphaned worktrees and old telemetry files.
-
-### Step 1 — Locate dirs
-
-```bash
-REPO_ROOT=$(git rev-parse --show-toplevel)
-WORKTREE_DIR="${REPO_ROOT}/.devflow/worktrees"
-TELEMETRY_DIR=".devflow/runs/"
-if [ -f ".devflow.yaml" ]; then
-  CONFIGURED=$(grep -A1 'path:' .devflow.yaml 2>/dev/null | tail -1 | awk '{print $2}' || true)
-  [ -n "$CONFIGURED" ] && TELEMETRY_DIR="$CONFIGURED"
-fi
-RETAIN_DAYS=$(grep 'retain_days:' .devflow.yaml 2>/dev/null | awk '{print $2}' || echo 30)
-```
-
-### Step 2 — Find orphaned worktrees
-
-For each directory in `$WORKTREE_DIR`:
-
-```bash
-ORPHANED_WORKTREES=""
-if [ -d "$WORKTREE_DIR" ]; then
-  for wt in "$WORKTREE_DIR"/*/; do
-    [ -d "$wt" ] || continue
-    slug=$(basename "$wt")
-    jsonl=$(ls "${TELEMETRY_DIR}${slug}"-*.jsonl 2>/dev/null | tail -1)
-    if [ -z "$jsonl" ]; then
-      ORPHANED_WORKTREES="${ORPHANED_WORKTREES} ${slug}"
-    else
-      last_event=$(tail -1 "$jsonl" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("event",""))' 2>/dev/null || true)
-      if [ "$last_event" = "stop" ] || [ "$last_event" = "fail" ]; then
-        ORPHANED_WORKTREES="${ORPHANED_WORKTREES} ${slug}"
-      fi
-    fi
-  done
-fi
-```
-
-### Step 3 — Find old telemetry
-
-```bash
-OLD_TELEMETRY=""
-if [ -d "$TELEMETRY_DIR" ]; then
-  while IFS= read -r f; do
-    OLD_TELEMETRY="${OLD_TELEMETRY} ${f}"
-  done < <(find "$TELEMETRY_DIR" -name "*.jsonl" -mtime "+${RETAIN_DAYS}" 2>/dev/null)
-fi
-```
-
-### Step 4 — Show summary and confirm
-
-If both `$ORPHANED_WORKTREES` and `$OLD_TELEMETRY` are empty: "Nothing to clean." and stop.
-
-Otherwise display:
-
-```
-DevFlow clean
-──────────────────────────────────────────
-  Orphaned worktrees (<N>):
-    .devflow/worktrees/<slug>
-    ...
-
-  Old telemetry (><RETAIN_DAYS> days) (<N>):
-    .devflow/runs/<file>.jsonl
-    ...
-
-Total: <N> worktrees, <N> telemetry files
-──────────────────────────────────────────
-Remove all? (y/N)
-```
-
-Wait for user confirmation. If not `y`/`yes`: "Cancelled." and stop.
-
-### Step 5 — Remove
-
-For each slug in `$ORPHANED_WORKTREES`:
-
-```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/worktree-cleanup.sh" "<slug>"
-```
-
-For each file in `$OLD_TELEMETRY`:
-
-```bash
-rm -f "<file>"
-```
-
-### Step 6 — Report
-
-```
-Cleaned:
-  <N> worktrees removed
-  <N> telemetry files deleted
+Updated. Restart Claude Code for changes to take effect.
 ```
 
 ---
 
 ## Unknown subcommand
 
-If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, or `rollback`, respond:
+If `$SUBCMD` is not `init`, `start`, `plan`, `status`, `retry`, `logs`, `config`, `specialist`, `abort`, `doctor`, `clean`, `rollback`, or `update`, respond:
 
 ```
 DevFlow: unknown subcommand '$SUBCMD'. Usage:
