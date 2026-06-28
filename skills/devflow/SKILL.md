@@ -58,6 +58,7 @@ GATE_LINT=$(yq e '.gates.require_lint_pass // "true"' .devflow.yaml 2>/dev/null 
 DEPLOY_BEFORE_PR=$(yq e '.gates.deploy_before_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
 AUTO_PR=$(yq e '.gates.auto_pr // "false"' .devflow.yaml 2>/dev/null || echo "false")
 DRAFT_PR=$(yq e '.gates.draft_pr // "true"' .devflow.yaml 2>/dev/null || echo "true")
+REQUIRE_DIFF_REVIEW=$(yq e '.gates.require_diff_review // "true"' .devflow.yaml 2>/dev/null || echo "true")
 FALLBACK_MODE=$(yq e '.fallback.mode // "generic"' .devflow.yaml 2>/dev/null || echo "generic")
 MAX_TOKENS=$(yq e '.limits.max_tokens_per_run // "0"' .devflow.yaml 2>/dev/null || echo "0")
 ON_LIMIT=$(yq e '.limits.on_limit // "confirm"' .devflow.yaml 2>/dev/null || echo "confirm")
@@ -260,7 +261,34 @@ If `$CMD_BUILD` is set, run it inside `$WORKTREE`.
 
 ### Step 12 — Review
 
-Self-review all changes in `$WORKTREE`: correctness vs plan, no hardcoded values, no regressions, adequate test coverage. If issues found, return to Step 8 for targeted re-execution.
+If `$REQUIRE_DIFF_REVIEW=true`, show the diff summary first:
+
+```bash
+echo "DevFlow: changes in worktree —"
+git -C "$WORKTREE" diff --stat HEAD 2>/dev/null || git -C "$WORKTREE" diff --stat 2>/dev/null || echo "  (no diff available)"
+echo "Files changed:"
+git -C "$WORKTREE" status --short 2>/dev/null | head -20
+CHANGED_FILES=$(git -C "$WORKTREE" diff --name-only HEAD 2>/dev/null | wc -l || echo "?")
+CHANGED_LINES=$(git -C "$WORKTREE" diff --stat HEAD 2>/dev/null | tail -1 || echo "")
+echo "Summary: ${CHANGED_FILES} file(s) changed — ${CHANGED_LINES}"
+```
+
+Self-review all changes in `$WORKTREE`: correctness vs plan, no hardcoded values, no regressions, adequate test coverage.
+
+If `$REQUIRE_DIFF_REVIEW=true`, ask:
+
+```
+Review looks good? (y/N/redo)
+```
+
+- `y` → proceed to Step 13
+- `redo` → return to Step 8 for re-execution
+- `N` or anything else → log fail and stop:
+  ```bash
+  "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh" fail "$RUN_ID" "phase=review" "reason=user_rejected"
+  ```
+
+If `$REQUIRE_DIFF_REVIEW=false`, proceed automatically.
 
 **Run now before proceeding:**
 ```bash
