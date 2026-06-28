@@ -1,0 +1,21 @@
+version: 1
+base_branch: main
+models:
+  plan: claude-opus-4-8
+  execution: claude-sonnet-4-6
+commands:
+  test: echo "run per-package tests"
+  lint: echo "run per-package lint"
+fan_out:
+  enabled: true
+  max_agents: 3
+  on_partial_failure: isolate
+gates:
+  deploy_before_pr: false
+  require_tests_pass: true
+  require_lint_pass: true
+fallback:
+  mode: generic
+telemetry:
+  enabled: true
+  path: .devflow/runs/

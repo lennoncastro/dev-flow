@@ -1,0 +1,39 @@
+name: Release gate
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  release-gate:
+    name: Release gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify tag is on main
+        run: |
+          TAG_COMMIT=$(git rev-list -n 1 "$GITHUB_REF_NAME")
+          MAIN_COMMITS=$(git rev-list origin/main)
+          echo "$MAIN_COMMITS" | grep -q "$TAG_COMMIT" || \
+            { echo "Tag $GITHUB_REF_NAME is not on main branch"; exit 1; }
+      - name: Install yq and shellcheck
+        run: |
+          pip install yq
+          sudo apt-get install -y shellcheck
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh
+      - name: Validate single-stack config
+        run: scripts/validate-config.sh fixtures/single-stack/.devflow.yaml
+      - name: Validate monorepo config
+        run: scripts/validate-config.sh fixtures/monorepo/.devflow.yaml
+      - name: Validate fallback config
+        run: scripts/validate-config.sh fixtures/fallback/.devflow.yaml
+      - name: Validate fallback-refuse config
+        run: scripts/validate-config.sh fixtures/fallback-refuse/.devflow.yaml
+      - name: Shellcheck all scripts
+        run: shellcheck scripts/*.sh
+      - name: Release gate passed
+        run: echo "Release gate passed for ${{ github.ref_name }}"

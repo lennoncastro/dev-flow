@@ -16,8 +16,9 @@ cleanup_worktree() {
   fi
 
   if git -C "$REPO_ROOT" show-ref --verify --quiet "refs/heads/${branch}"; then
-    git -C "$REPO_ROOT" branch -d "$branch" 2>/dev/null || \
-      git -C "$REPO_ROOT" branch -D "$branch" 2>/dev/null && echo "Deleted branch: ${branch}" || true
+    if git -C "$REPO_ROOT" branch -d "$branch" 2>/dev/null || git -C "$REPO_ROOT" branch -D "$branch" 2>/dev/null; then
+      echo "Deleted branch: ${branch}"
+    fi
   fi
 }
 
