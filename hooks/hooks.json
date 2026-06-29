@@ -17,6 +17,18 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/telemetry.sh stop \"${DEVFLOW_RUN_ID:-unknown}\""
+          },
+          {
+            "type": "command",
+            "command": "[ -f .devflow.yaml ] || exit 0; if [ -f docker-compose.yml ] || [ -f docker-compose.yaml ]; then docker compose build --no-cache && docker compose up -d; fi"
+          },
+          {
+            "type": "command",
+            "command": "[ -f .devflow.yaml ] || exit 0; if [ -f pubspec.yaml ]; then flutter test 2>/dev/null; elif [ -f package.json ] && grep -q '\"test\"' package.json; then npm test --passWithNoTests 2>/dev/null; elif [ -f pytest.ini ] || [ -f pyproject.toml ] || [ -f setup.cfg ]; then python -m pytest 2>/dev/null; elif [ -f Makefile ] && grep -q '^test' Makefile; then make test 2>/dev/null; fi; true"
+          },
+          {
+            "type": "command",
+            "command": "[ -f .devflow.yaml ] || exit 0; git diff --name-only HEAD 2>/dev/null | xargs grep -n 'TODO\\|FIXME\\|HACK' 2>/dev/null | head -20 | { read line && echo \"⚠ TODOs encontrados:\" && echo \"$line\" && cat; } || true"
           }
         ]
       }
